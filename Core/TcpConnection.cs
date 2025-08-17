@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using TcpEventFramework.Interfaces;
 using TcpEventFramework.Models;
 using TcpEventFramework.Events;
+using ErrorEventArgs = TcpEventFramework.Events.ErrorEventArgs;
 
 namespace TcpEventFramework.Core
 {

@@ -1,4 +1,6 @@
 using System;
+using System.Threading.Tasks;
+
 using TcpEventFramework.Interfaces;
 using TcpEventFramework.Events;
 
@@ -15,7 +17,7 @@ namespace TcpEventFramework.Core
             };
         }
 
-        public async void Emit(ITcpConnection connection, IEventMessage message)
+        public async Task Emit(ITcpConnection connection, IEventMessage message)
         {
             await connection.SendAsync(message);
         }

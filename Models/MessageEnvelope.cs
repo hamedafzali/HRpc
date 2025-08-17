@@ -7,7 +7,7 @@ using System.Text.Json.Serialization;
 
 namespace TcpEventFramework.Models
 {
-    internal class MessageEnvelope
+    public class MessageEnvelope
     {
         #if NETFRAMEWORK
         [JsonProperty("eventName")]
