@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net462;net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Version>1.0.0</Version>
+    <Authors>Hamed Afzali</Authors>
+    <Company>PixelWizards</Company>
+    <Description>HRpc - Event-driven TCP communication framework for .NET</Description>
+    <PackageProjectUrl>https://github.com/hamedafzali/HRpc</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/hamedafzali/HRpc</RepositoryUrl>
+    <PackageTags>TCP;Events;Networking;Client;Server;RPC</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+</Project>
