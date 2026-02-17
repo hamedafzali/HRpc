@@ -1,41 +1,34 @@
-# HRpc v1.0.1 Release Notes
+# HRpc v1.0.2 Release Notes
 
 Release date: 2026-02-17
-NuGet: https://www.nuget.org/packages/HRpc/1.0.1
+NuGet: https://www.nuget.org/packages/HRpc/1.0.2
 
 ## Summary
 
-- Reliability-focused release that hardens connection lifecycle handling, adds cancellation support, and improves release documentation.
+- Documentation patch release to correct NuGet package README for end-user package consumption.
 
 ## Added
 
-- `ITcpServer.MessageReceived` event for server-side message observation.
-- Publish workflow docs: `project.md` and `PUBLISH_CHECKLIST.md`.
+- Server-side quick start section in NuGet README.
 
 ## Changed
 
-- `ITcpConnection.ConnectAsync` now accepts `CancellationToken`.
-- `ITcpServer.StartAsync` now accepts `CancellationToken`.
-- `EventDispatcher.Subscribe` now returns `IDisposable` for explicit unsubscribe.
-- `TcpConnection.IsConnected` now uses tracked state instead of raw socket heuristic.
+- README reorganized to package-consumer format.
+- Installation instructions now lead with `dotnet add package HRpc`.
+- Added protocol and error-handling notes relevant to library users.
 
 ## Fixed
 
-- `ConnectAsync` now surfaces failures to callers (throws) while still raising `ErrorOccurred`.
-- Message envelope deserialization now validates null results and throws `FormatException` for invalid payloads.
-- Server now parses incoming envelopes and raises message events instead of discarding lines.
+- Removed repository maintenance/build content from package README.
+- NuGet README now reflects real package usage instead of project contributor workflow.
 
 ## Breaking Changes
 
-- Method signature updates:
-  - `ConnectAsync(string host, int port)` -> `ConnectAsync(string host, int port, CancellationToken cancellationToken = default)`
-  - `StartAsync(int port)` -> `StartAsync(int port, CancellationToken cancellationToken = default)`
-- `EventDispatcher.Subscribe(...)` return type changed from `void` to `IDisposable`.
+- None.
 
 ## Migration Notes
 
-- Existing call sites continue to compile when using default optional parameters.
-- If you relied on previous `Subscribe` behavior, store and dispose returned subscription when handler should be removed.
+- No migration required.
 
 ## Verification
 
@@ -45,7 +38,7 @@ NuGet: https://www.nuget.org/packages/HRpc/1.0.1
 
 ## Checksums / Artifacts
 
-- `HRpc.1.0.1.nupkg`
+- `HRpc.1.0.2.nupkg`
 
 ## Contributors
 

@@ -1,23 +1,25 @@
 # HRpc
 
-HRpc is a lightweight C# library for TCP-based, event-driven messaging.
+HRpc is a lightweight .NET library for TCP-based, event-driven messaging.
 
-## Features
-
-- Event-driven messaging over TCP
-- JSON message envelope (`eventName`, `payload`)
-- Client connection abstraction (`ITcpConnection`)
-- TCP server with client/message events (`ITcpServer`)
-
-## Prerequisites
-
-- .NET SDK 9.0+
-
-## Build and Test
+## Install
 
 ```bash
-dotnet build /Users/hamed.afzali/Desktop/Repos/HRpc/HRpc.sln
-dotnet test /Users/hamed.afzali/Desktop/Repos/HRpc/HRpc.sln
+dotnet add package HRpc
+```
+
+## Supported Frameworks
+
+- `net6.0`
+- `net7.0`
+- `net9.0`
+
+## Message Format
+
+HRpc exchanges newline-delimited JSON envelopes:
+
+```json
+{"eventName":"MyEvent","payload":"Any string payload"}
 ```
 
 ## Quick Start (Client)
@@ -31,11 +33,36 @@ using var connection = new TcpClientWrapper();
 
 await connection.ConnectAsync("127.0.0.1", 9000);
 
-using var subscription = dispatcher.Subscribe(connection, "TestEvent", msg =>
+using var subscription = dispatcher.Subscribe(connection, "Greeting", msg =>
 {
     Console.WriteLine($"Received: {msg.Payload}");
 });
 
-await dispatcher.Emit(connection, new EventMessage("TestEvent", "Hello World"));
+await dispatcher.Emit(connection, new EventMessage("Greeting", "Hello"));
 await connection.CloseAsync();
 ```
+
+## Quick Start (Server)
+
+```csharp
+using TcpEventFramework.Core;
+
+var server = new TcpServer();
+server.MessageReceived += (_, e) =>
+{
+    Console.WriteLine($"{e.Message.EventName}: {e.Message.Payload}");
+};
+
+await server.StartAsync(9000);
+```
+
+## Error Handling
+
+- `ConnectAsync(...)` throws on failure and also raises `ErrorOccurred`.
+- Invalid message payloads raise `ErrorOccurred`.
+- `EventDispatcher.Subscribe(...)` returns `IDisposable`; dispose it to unsubscribe.
+
+## Links
+
+- Source: [https://github.com/hamedafzali/HRpc](https://github.com/hamedafzali/HRpc)
+- License: MIT
