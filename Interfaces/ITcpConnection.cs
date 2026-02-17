@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace TcpEventFramework.Interfaces
@@ -10,7 +11,7 @@ namespace TcpEventFramework.Interfaces
         event EventHandler<Events.ConnectionEventArgs> Disconnected;
         event EventHandler<Events.ErrorEventArgs> ErrorOccurred;
 
-        Task ConnectAsync(string host, int port);
+        Task ConnectAsync(string host, int port, CancellationToken cancellationToken = default);
         Task SendAsync(IEventMessage message);
         Task CloseAsync();
         bool IsConnected { get; }

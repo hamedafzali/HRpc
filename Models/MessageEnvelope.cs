@@ -1,3 +1,5 @@
+using System;
+
 #if NETFRAMEWORK
 using Newtonsoft.Json;
 #else
@@ -34,10 +36,16 @@ namespace TcpEventFramework.Models
 public static MessageEnvelope Deserialize(string json)
 {
 #if NETFRAMEWORK
-    return JsonConvert.DeserializeObject<MessageEnvelope>(json)!;
+    var envelope = JsonConvert.DeserializeObject<MessageEnvelope>(json);
 #else
-    return JsonSerializer.Deserialize<MessageEnvelope>(json)!;
+    var envelope = JsonSerializer.Deserialize<MessageEnvelope>(json);
 #endif
+    if (envelope == null)
+    {
+        throw new FormatException("Invalid message envelope payload.");
+    }
+
+    return envelope;
 }
 
     }
