@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Pipes;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using TcpEventFramework.Events;
@@ -23,6 +24,9 @@ namespace TcpEventFramework.Core
         public event EventHandler<ConnectionEventArgs>? ClientDisconnected;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<ErrorEventArgs>? ErrorOccurred;
+
+        // Optional message to send upon client connection
+        public IEventMessage? InitialMessage { get; set; }
 
         protected void OnErrorOccurred(string message, Exception? ex = null)
         {
@@ -115,6 +119,18 @@ namespace TcpEventFramework.Core
 
             try
             {
+                // Send initial message if configured
+                if (InitialMessage != null)
+                {
+                    var envelope = new MessageEnvelope
+                    {
+                        EventName = InitialMessage.EventName,
+                        Payload = InitialMessage.Payload
+                    };
+                    var bytes = Encoding.UTF8.GetBytes(envelope.Serialize() + "\n");
+                    await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+                }
+
                 var line = await reader.ReadLineAsync().WithCancellation(cancellationToken).ConfigureAwait(false);
                 if (line == null)
                 {

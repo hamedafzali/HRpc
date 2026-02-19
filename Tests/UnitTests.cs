@@ -7,7 +7,6 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.IO.Pipes;
 using TcpEventFramework.Core;
 using TcpEventFramework.Events;
 using TcpEventFramework.Interfaces;
@@ -255,12 +254,10 @@ namespace TcpEventFramework.Tests
                 var idx = i;
                 clients[i] = Task.Run(async () =>
                 {
-                    using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-                    await client.ConnectAsync(3000);
-                    using var writer = new StreamWriter(client, Encoding.UTF8, 1024, leaveOpen: true) { AutoFlush = true };
-
-                    var frame = new MessageEnvelope { EventName = "Stress", Payload = idx.ToString() }.Serialize();
-                    await writer.WriteLineAsync(frame);
+                    var client = new PipeClientWrapper();
+                    await client.ConnectAsync(pipeName);
+                    await client.SendAsync(new EventMessage("Stress", idx.ToString()));
+                    await client.CloseAsync();
                 });
             }
 
@@ -287,14 +284,10 @@ namespace TcpEventFramework.Tests
             var serverTask = server.StartAsync(pipeName, cts.Token);
             await Task.Delay(150);
 
-            using (var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
-            {
-                await client.ConnectAsync(2000);
-                using var writer = new StreamWriter(client, Encoding.UTF8, 1024, leaveOpen: true) { AutoFlush = true };
-
-                var payload = new MessageEnvelope { EventName = "Ping", Payload = "Pong" }.Serialize();
-                await writer.WriteLineAsync(payload);
-            }
+            var client = new PipeClientWrapper();
+            await client.ConnectAsync(pipeName);
+            await client.SendAsync(new EventMessage("Ping", "Pong"));
+            await client.CloseAsync();
 
             var completed = await Task.WhenAny(receivedTcs.Task, Task.Delay(TimeSpan.FromSeconds(3)));
             Assert.AreEqual(receivedTcs.Task, completed);
@@ -314,15 +307,10 @@ namespace TcpEventFramework.Tests
             var connection = new PipeClientWrapper();
             connection.MessageReceived += (_, e) => received.TrySetResult(e.Message.Payload);
 
-            var serverTask = Task.Run(async () =>
-            {
-                using var server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-                await server.WaitForConnectionAsync();
-                using var writer = new StreamWriter(server, Encoding.UTF8, 1024, leaveOpen: true) { AutoFlush = true };
+            var server = new PipeServer();
+            server.InitialMessage = new EventMessage("Greeting", "Hello");
 
-                var payload = new MessageEnvelope { EventName = "Greeting", Payload = "Hello" }.Serialize();
-                await writer.WriteLineAsync(payload);
-            });
+            var serverTask = server.StartAsync(pipeName);
 
             await connection.ConnectAsync(pipeName);
             var completed = await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(3)));
@@ -331,6 +319,7 @@ namespace TcpEventFramework.Tests
             Assert.AreEqual("Hello", received.Task.Result);
 
             await connection.CloseAsync();
+            await server.StopAsync();
             await serverTask;
         }
 
