@@ -13,7 +13,7 @@ using ErrorEventArgs = TcpEventFramework.Events.ErrorEventArgs;
 
 namespace TcpEventFramework.Core
 {
-    public class PipeServer : ITcpServer
+    public class PipeServer : ITcpServer, IDisposable
     {
         private readonly ConcurrentDictionary<NamedPipeServerStream, Task> _clientTasks = new ConcurrentDictionary<NamedPipeServerStream, Task>();
         private CancellationTokenSource? _serverCts;
@@ -178,7 +178,7 @@ namespace TcpEventFramework.Core
                 {
                     kvp.Key.Dispose();
                 }
-                catch
+                catch (Exception)
                 {
                     // ignore
                 }
@@ -190,6 +190,19 @@ namespace TcpEventFramework.Core
             _clientTasks.Clear();
             cts?.Dispose();
             _serverCts = null;
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                _running = false;
+
+            }
+            catch (Exception)
+            {
+                // ignore
+            }
         }
     }
 }

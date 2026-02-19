@@ -24,6 +24,9 @@ It provides a consistent client/server abstraction for line-delimited JSON messa
 
 ### Core Types
 
+- `TcpEventFramework.Core.Connection` (unified TCP/Pipe client)
+- `TcpEventFramework.Core.Server` (unified TCP/Pipe server)
+- `TcpEventFramework.Core.TransportType` (enum: Tcp, Pipe)
 - `TcpEventFramework.Core.TcpClientWrapper`
 - `TcpEventFramework.Core.TcpServer`
 - `TcpEventFramework.Core.PipeServer`
