@@ -1,26 +1,25 @@
-# HRpc v1.0.2 Release Notes
+# HRpc v1.1.0 Release Notes
 
-Release date: 2026-02-17
-NuGet: https://www.nuget.org/packages/HRpc/1.0.2
+Release date: 2026-02-19
+NuGet: https://www.nuget.org/packages/HRpc/1.1.0
 
 ## Summary
 
-- Documentation patch release to correct NuGet package README for end-user package consumption.
+- Feature release adding local Named Pipe transport and .NET Framework 4.8 support.
 
 ## Added
 
-- Server-side quick start section in NuGet README.
+- Local Named Pipe client transport (`PipeConnection`, `PipeClientWrapper`).
+- `net48` target framework support.
 
 ## Changed
 
-- README reorganized to package-consumer format.
-- Installation instructions now lead with `dotnet add package HRpc`.
-- Added protocol and error-handling notes relevant to library users.
+- NuGet package metadata updated (description/tags) and README updated with Named Pipe example.
+- Removed legacy `pipetemplate/` sources that depended on external packages.
 
 ## Fixed
 
-- Removed repository maintenance/build content from package README.
-- NuGet README now reflects real package usage instead of project contributor workflow.
+- `TcpServer.StartAsync` made more robust against race during shutdown by using a captured cancellation token.
 
 ## Breaking Changes
 
@@ -32,13 +31,13 @@ NuGet: https://www.nuget.org/packages/HRpc/1.0.2
 
 ## Verification
 
-- Target frameworks validated: `net6.0`, `net7.0`, `net9.0`
+- Target frameworks validated: `net48`, `net6.0`, `net7.0`, `net9.0`
 - Test command: `dotnet test /Users/hamed.afzali/Desktop/Repos/HRpc/HRpc.sln -c Release`
 - Pack command: `dotnet pack /Users/hamed.afzali/Desktop/Repos/HRpc/HRpc.csproj -c Release -o /Users/hamed.afzali/Desktop/Repos/HRpc/artifacts`
 
 ## Checksums / Artifacts
 
-- `HRpc.1.0.2.nupkg`
+- `HRpc.1.1.0.nupkg`
 
 ## Contributors
 

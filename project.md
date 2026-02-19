@@ -15,6 +15,7 @@ It provides a consistent client/server abstraction for line-delimited JSON messa
 
 ## Target Frameworks
 
+- `net48`
 - `net6.0`
 - `net7.0`
 - `net9.0`
@@ -25,6 +26,8 @@ It provides a consistent client/server abstraction for line-delimited JSON messa
 
 - `TcpEventFramework.Core.TcpClientWrapper`
 - `TcpEventFramework.Core.TcpServer`
+- `TcpEventFramework.Core.PipeServer`
+- `TcpEventFramework.Core.PipeClientWrapper`
 - `TcpEventFramework.Core.EventDispatcher`
 - `TcpEventFramework.Models.EventMessage`
 - `TcpEventFramework.Models.MessageEnvelope`
@@ -33,6 +36,8 @@ It provides a consistent client/server abstraction for line-delimited JSON messa
 
 - `TcpEventFramework.Interfaces.ITcpConnection`
 - `TcpEventFramework.Interfaces.ITcpClient`
+- `TcpEventFramework.Interfaces.IPipeConnection`
+- `TcpEventFramework.Interfaces.IPipeClient`
 - `TcpEventFramework.Interfaces.ITcpServer`
 - `TcpEventFramework.Interfaces.IEventMessage`
 
@@ -47,10 +52,11 @@ It provides a consistent client/server abstraction for line-delimited JSON messa
 HRpc transmits one JSON envelope per line:
 
 ```json
-{"eventName":"EventName","payload":"Any string payload"}
+{ "eventName": "EventName", "payload": "Any string payload" }
 ```
 
 Notes:
+
 - UTF-8 encoding
 - Newline (`\n`) delimits each message
 - Invalid JSON payloads trigger `ErrorOccurred`
@@ -170,5 +176,13 @@ Use semantic versioning:
 - Payload is string-based (no typed schema enforcement)
 - Protocol is newline-delimited JSON only
 - No built-in auth, encryption, or message replay protection
+
+## Latest Implementation Status
+
+- Added local Named Pipe client transport via `PipeConnection` / `PipeClientWrapper`.
+- Uses the same newline-delimited JSON `MessageEnvelope` protocol as TCP.
+- Pipe transport is local-only (same-machine), no remote pipe host support.
+- Removed legacy `pipetemplate/` sample sources (they depended on external GMG/BasicTools packages).
+- Added `net48` target and implemented NETFRAMEWORK compatibility for cancellation-aware reads and async disposal.
 
 For production internet-facing usage, run behind TLS-enabled channels and authentication boundaries.

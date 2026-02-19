@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using TcpEventFramework.Events;
 using TcpEventFramework.Interfaces;
 using TcpEventFramework.Models;
+using TcpEventFramework.Utils;
 using ErrorEventArgs = TcpEventFramework.Events.ErrorEventArgs;
 
 namespace TcpEventFramework.Core
@@ -40,12 +41,19 @@ namespace TcpEventFramework.Core
             _listener.Start();
             _running = true;
             _serverCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var serverToken = _serverCts.Token;
 
             try
             {
-                while (!_serverCts.Token.IsCancellationRequested)
+                while (!serverToken.IsCancellationRequested)
                 {
-                    var client = await _listener.AcceptTcpClientAsync(_serverCts.Token);
+                    TcpClient client;
+#if NETFRAMEWORK
+                    serverToken.ThrowIfCancellationRequested();
+                    client = await _listener.AcceptTcpClientAsync();
+#else
+                    client = await _listener.AcceptTcpClientAsync(serverToken);
+#endif
                     var endPoint = client.Client.RemoteEndPoint as IPEndPoint;
 
                     ClientConnected?.Invoke(this, new ConnectionEventArgs(
@@ -53,7 +61,7 @@ namespace TcpEventFramework.Core
                         endPoint?.Port ?? 0
                     ));
 
-                    var task = HandleClientAsync(client, _serverCts.Token);
+                    var task = HandleClientAsync(client, serverToken);
                     _clientTasks[client] = task;
                     _ = task.ContinueWith(_ =>
                     {
@@ -78,14 +86,18 @@ namespace TcpEventFramework.Core
 
         private async Task HandleClientAsync(TcpClient client, CancellationToken cancellationToken)
         {
+#if NETFRAMEWORK
+            using var stream = client.GetStream();
+#else
             await using var stream = client.GetStream();
+#endif
             using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
 
             try
             {
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    var line = await reader.ReadLineAsync().WaitAsync(cancellationToken);
+                    var line = await reader.ReadLineAsync().WithCancellation(cancellationToken);
                     if (line == null)
                     {
                         break;

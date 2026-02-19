@@ -1,7 +1,6 @@
 using System;
 using System.IO;
-using System.Net;
-using System.Net.Sockets;
+using System.IO.Pipes;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,16 +12,18 @@ using ErrorEventArgs = TcpEventFramework.Events.ErrorEventArgs;
 
 namespace TcpEventFramework.Core
 {
-    public class TcpConnection : ITcpConnection
+    public class PipeConnection : IPipeConnection
     {
-        protected TcpClient _client = new TcpClient();
-        protected NetworkStream? _stream;
-
         private readonly object _stateLock = new object();
+
+        protected NamedPipeClientStream? _client;
+        protected Stream? _stream;
+
         private CancellationTokenSource? _receiveCts;
         private Task? _receiveTask;
         private bool _isConnected;
         private bool _disconnectRaised;
+        private string _pipeName = string.Empty;
 
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<ConnectionEventArgs>? Connected;
@@ -40,8 +41,13 @@ namespace TcpEventFramework.Core
             }
         }
 
-        public virtual async Task ConnectAsync(string host, int port, CancellationToken cancellationToken = default)
+        public async Task ConnectAsync(string pipeName, CancellationToken cancellationToken = default)
         {
+            if (string.IsNullOrWhiteSpace(pipeName))
+            {
+                throw new ArgumentException("Pipe name cannot be null/empty.", nameof(pipeName));
+            }
+
             if (IsConnected)
             {
                 throw new InvalidOperationException("Connection is already established.");
@@ -49,14 +55,10 @@ namespace TcpEventFramework.Core
 
             try
             {
-                _client = new TcpClient();
-#if NETFRAMEWORK
-                cancellationToken.ThrowIfCancellationRequested();
-                await _client.ConnectAsync(host, port);
-#else
-                await _client.ConnectAsync(host, port, cancellationToken);
-#endif
-                _stream = _client.GetStream();
+                _pipeName = pipeName;
+                _client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+                await _client.ConnectAsync(cancellationToken);
+                _stream = _client;
 
                 lock (_stateLock)
                 {
@@ -66,7 +68,7 @@ namespace TcpEventFramework.Core
                     _receiveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 }
 
-                Connected?.Invoke(this, new ConnectionEventArgs(host, port));
+                Connected?.Invoke(this, new ConnectionEventArgs(pipeName, 0));
                 _receiveTask = ReceiveLoopAsync(_receiveCts.Token);
             }
             catch (Exception ex)
@@ -79,6 +81,11 @@ namespace TcpEventFramework.Core
                 ErrorOccurred?.Invoke(this, new ErrorEventArgs(ex.Message, ex));
                 throw;
             }
+        }
+
+        Task ITcpConnection.ConnectAsync(string host, int port, CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException("PipeConnection does not support host/port ConnectAsync. Use ConnectAsync(pipeName, cancellationToken).");
         }
 
         public async Task SendAsync(IEventMessage message)
@@ -168,7 +175,11 @@ namespace TcpEventFramework.Core
                     _stream = null;
                 }
 
-                _client.Close();
+                if (_client != null)
+                {
+                    _client.Dispose();
+                    _client = null;
+                }
 
                 if (receiveTask != null)
                 {
@@ -195,7 +206,7 @@ namespace TcpEventFramework.Core
         public void Dispose()
         {
             _receiveCts?.Dispose();
-            _client.Dispose();
+            _client?.Dispose();
         }
 
         private void RaiseDisconnected()
@@ -212,11 +223,7 @@ namespace TcpEventFramework.Core
                 _disconnectRaised = true;
                 _isConnected = false;
 
-                var endpoint = _client.Client.RemoteEndPoint as IPEndPoint;
-                args = new ConnectionEventArgs(
-                    endpoint?.Address.ToString() ?? string.Empty,
-                    endpoint?.Port ?? 0
-                );
+                args = new ConnectionEventArgs(_pipeName, 0);
             }
 
             Disconnected?.Invoke(this, args);

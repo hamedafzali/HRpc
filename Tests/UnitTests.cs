@@ -1,11 +1,13 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.IO.Pipes;
 using TcpEventFramework.Core;
 using TcpEventFramework.Events;
 using TcpEventFramework.Interfaces;
@@ -170,6 +172,165 @@ namespace TcpEventFramework.Tests
             Assert.AreEqual("Pong", receivedTcs.Task.Result.Payload);
 
             await server.StopAsync();
+            await serverTask;
+        }
+
+        [TestMethod]
+        public async Task TcpServer_Stress_ShouldHandleManyConcurrentClientMessages()
+        {
+            var port = GetFreePort();
+            var server = new TcpServer();
+
+            var received = 0;
+            var clientsCount = 20;
+            var messagesPerClient = 10;
+            var expected = clientsCount * messagesPerClient;
+            var allReceived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            server.MessageReceived += (_, _) =>
+            {
+                if (Interlocked.Increment(ref received) == expected)
+                {
+                    allReceived.TrySetResult(true);
+                }
+            };
+
+            var serverTask = server.StartAsync(port);
+            await Task.Delay(150);
+
+            var clients = new Task[clientsCount];
+            for (var i = 0; i < clientsCount; i++)
+            {
+                var idx = i;
+                clients[i] = Task.Run(async () =>
+                {
+                    using var client = new TcpClient();
+                    await client.ConnectAsync("127.0.0.1", port);
+                    await using var stream = client.GetStream();
+
+                    for (var m = 0; m < messagesPerClient; m++)
+                    {
+                        var frame = new MessageEnvelope { EventName = "Stress", Payload = $"{idx}:{m}" }.Serialize() + "\n";
+                        var bytes = Encoding.UTF8.GetBytes(frame);
+                        await stream.WriteAsync(bytes, 0, bytes.Length);
+                    }
+                });
+            }
+
+            await Task.WhenAll(clients);
+            var completed = await Task.WhenAny(allReceived.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+
+            Assert.AreEqual(allReceived.Task, completed);
+            Assert.AreEqual(expected, received);
+
+            await server.StopAsync();
+            await serverTask;
+        }
+
+        [TestMethod]
+        public async Task PipeServer_Stress_ShouldHandleManyConcurrentClientMessages()
+        {
+            var pipeName = "hrpcps-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            var server = new PipeServer();
+
+            var received = 0;
+            var clientsCount = 50;
+            var expected = clientsCount;
+            var allReceived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            server.MessageReceived += (_, _) =>
+            {
+                if (Interlocked.Increment(ref received) == expected)
+                {
+                    allReceived.TrySetResult(true);
+                }
+            };
+
+            var serverTask = server.StartAsync(pipeName);
+            await Task.Delay(150);
+
+            var clients = new Task[clientsCount];
+            for (var i = 0; i < clientsCount; i++)
+            {
+                var idx = i;
+                clients[i] = Task.Run(async () =>
+                {
+                    using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+                    await client.ConnectAsync(3000);
+                    using var writer = new StreamWriter(client, Encoding.UTF8, 1024, leaveOpen: true) { AutoFlush = true };
+
+                    var frame = new MessageEnvelope { EventName = "Stress", Payload = idx.ToString() }.Serialize();
+                    await writer.WriteLineAsync(frame);
+                });
+            }
+
+            await Task.WhenAll(clients);
+            var completed = await Task.WhenAny(allReceived.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+
+            Assert.AreEqual(allReceived.Task, completed);
+            Assert.AreEqual(expected, received);
+
+            await server.StopAsync();
+            await serverTask;
+        }
+
+        [TestMethod]
+        public async Task PipeServer_ShouldRaiseMessageReceived_WhenClientSendsEnvelope()
+        {
+            var pipeName = "hrpcsrv-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            var server = new PipeServer();
+            var receivedTcs = new TaskCompletionSource<IEventMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cts = new CancellationTokenSource();
+
+            server.MessageReceived += (_, args) => receivedTcs.TrySetResult(args.Message);
+
+            var serverTask = server.StartAsync(pipeName, cts.Token);
+            await Task.Delay(150);
+
+            using (var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
+            {
+                await client.ConnectAsync(2000);
+                using var writer = new StreamWriter(client, Encoding.UTF8, 1024, leaveOpen: true) { AutoFlush = true };
+
+                var payload = new MessageEnvelope { EventName = "Ping", Payload = "Pong" }.Serialize();
+                await writer.WriteLineAsync(payload);
+            }
+
+            var completed = await Task.WhenAny(receivedTcs.Task, Task.Delay(TimeSpan.FromSeconds(3)));
+            Assert.AreEqual(receivedTcs.Task, completed);
+            Assert.AreEqual("Ping", receivedTcs.Task.Result.EventName);
+            Assert.AreEqual("Pong", receivedTcs.Task.Result.Payload);
+
+            await server.StopAsync();
+            await serverTask;
+        }
+
+        [TestMethod]
+        public async Task PipeConnection_ShouldReceiveMessage_FromNamedPipeServer()
+        {
+            var pipeName = "hrpc-test-" + Guid.NewGuid().ToString("N");
+
+            var received = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var connection = new PipeClientWrapper();
+            connection.MessageReceived += (_, e) => received.TrySetResult(e.Message.Payload);
+
+            var serverTask = Task.Run(async () =>
+            {
+                using var server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                await server.WaitForConnectionAsync();
+                using var writer = new StreamWriter(server, Encoding.UTF8, 1024, leaveOpen: true) { AutoFlush = true };
+
+                var payload = new MessageEnvelope { EventName = "Greeting", Payload = "Hello" }.Serialize();
+                await writer.WriteLineAsync(payload);
+            });
+
+            await connection.ConnectAsync(pipeName);
+            var completed = await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(3)));
+
+            Assert.AreEqual(received.Task, completed);
+            Assert.AreEqual("Hello", received.Task.Result);
+
+            await connection.CloseAsync();
             await serverTask;
         }
 
