@@ -4,6 +4,39 @@ All notable changes to HRpc are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Disconnect/teardown could throw `ObjectDisposedException` out of `CloseAsync`,
+  sometimes suppressing `Disconnected`/`ClientDisconnected` entirely.** `TcpConnection`
+  and `TcpServer` each read `Socket.RemoteEndPoint` *after* the socket could already be
+  closed — `TcpConnection.RaiseDisconnected()` ran from `ReceiveLoopAsync`'s `finally`,
+  racing `CloseAsync`'s own disposal of the same client; `TcpServer.HandleClientAsync`'s
+  `finally` re-read the endpoint at teardown instead of the one already captured at
+  accept time. `Socket.RemoteEndPoint` throws `ObjectDisposedException` on a disposed
+  socket on **every** target framework, so this was never a net48-specific issue — net48
+  merely made it deterministic, because its synchronous `Stream.Dispose()` path in
+  `CloseAsync` gives the racing continuation no scheduling gap to lose the race in;
+  net8.0/net9.0's `await Stream.DisposeAsync()` path has the identical race with lower
+  (but nonzero) probability of manifesting. Fixed by capturing the remote endpoint once,
+  at connect/accept time, and never reading it again during teardown.
+- **`TcpServer.StartAsync`'s accept loop surfaced normal shutdown as a fault.** Calling
+  `StopAsync()` disposes the listener while an accept is pending; on net48 (whose
+  `AcceptTcpClientAsync` overload has no `CancellationToken` support) the pending accept
+  observed that as `ObjectDisposedException` rather than cancellation, so a routine
+  `StopAsync()` call could rethrow out of `StartAsync` and report a spurious error. Now
+  scoped: `ObjectDisposedException` is treated as clean shutdown only when our own
+  cancellation was already requested, so an unrelated/genuine `ObjectDisposedException`
+  still surfaces normally.
+- **A throwing `Disconnected`/`ClientDisconnected` subscriber could abort cleanup.**
+  These events were invoked unguarded from inside `finally` blocks (`TcpConnection`,
+  `PipeConnection`, `TcpServer.HandleClientAsync`, `PipeServer.HandleClientAsync`), so an
+  exception from one subscriber could stop later cleanup (e.g. `client.Close()`,
+  `stream.Dispose()`) from running and escape the finally entirely — defeating the error
+  taxonomy the same way the `ObjectDisposedException` issue above did. All four are now
+  invoked per-subscriber via the same guarded dispatch already used for
+  `MessageReceived`/`ErrorOccurred`; a throwing subscriber is swallowed and traced rather
+  than propagated.
+
 ## [1.2.0] - 2026-08-20
 
 If you are upgrading from 1.1.x, read this entire entry before touching code. This

@@ -263,7 +263,14 @@ namespace HRpc.Core
                 args = new ConnectionEventArgs(_pipeName, 0);
             }
 
-            Disconnected?.Invoke(this, args);
+            // Guarded like TcpConnection.RaiseDisconnected: this fires from ReceiveLoopAsync's
+            // finally, so a throwing subscriber must not be allowed to escape and abort
+            // CloseAsync's own cleanup.
+            SafeInvoke.EachHandler(Disconnected, this, args, ex =>
+            {
+                System.Diagnostics.Trace.WriteLine(
+                    $"[HRpc] Disconnected subscriber threw and was swallowed: {ex}");
+            });
         }
     }
 }

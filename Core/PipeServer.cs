@@ -188,7 +188,13 @@ namespace HRpc.Core
             }
             finally
             {
-                ClientDisconnected?.Invoke(this, new ConnectionEventArgs(_pipeName, 0));
+                // Guarded so a throwing ClientDisconnected subscriber can't prevent stream.Dispose()
+                // from running below.
+                SafeInvoke.EachHandler(ClientDisconnected, this, new ConnectionEventArgs(_pipeName, 0), ex =>
+                {
+                    System.Diagnostics.Trace.WriteLine(
+                        $"[HRpc] ClientDisconnected subscriber threw and was swallowed: {ex}");
+                });
 
                 try
                 {

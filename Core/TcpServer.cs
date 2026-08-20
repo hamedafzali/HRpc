@@ -75,6 +75,11 @@ namespace HRpc.Core
 #else
                     client = await _listener.AcceptTcpClientAsync(serverToken);
 #endif
+                    // Captured once, at accept time, rather than read again from client.Client
+                    // in HandleClientAsync's finally: by teardown time the socket may already be
+                    // disposed, and RemoteEndPoint throws ObjectDisposedException on a disposed
+                    // socket on every target framework (the same hazard as TcpConnection's
+                    // RaiseDisconnected — see CHANGELOG).
                     var endPoint = client.Client.RemoteEndPoint as IPEndPoint;
 
                     ClientConnected?.Invoke(this, new ConnectionEventArgs(
@@ -82,7 +87,7 @@ namespace HRpc.Core
                         endPoint?.Port ?? 0
                     ));
 
-                    var task = HandleClientAsync(client, serverToken);
+                    var task = HandleClientAsync(client, endPoint, serverToken);
                     _clientTasks[client] = task;
                     _ = task.ContinueWith(_ =>
                     {
@@ -93,6 +98,15 @@ namespace HRpc.Core
             catch (OperationCanceledException)
             {
                 // Expected during shutdown.
+            }
+            catch (ObjectDisposedException) when (serverToken.IsCancellationRequested)
+            {
+                // TcpListener.Stop() (called from StopAsync) disposes the underlying socket while
+                // an AcceptTcpClientAsync is pending. On net48 that has no overload accepting a
+                // CancellationToken, so the pending accept observes the disposal as
+                // ObjectDisposedException rather than cancellation. Only swallow it when we know
+                // shutdown was requested by us; otherwise fall through and report it, since it may
+                // be a genuine, unrelated disposal.
             }
             catch (Exception ex)
             {
@@ -105,7 +119,7 @@ namespace HRpc.Core
             }
         }
 
-        private async Task HandleClientAsync(TcpClient client, CancellationToken cancellationToken)
+        private async Task HandleClientAsync(TcpClient client, IPEndPoint? endPoint, CancellationToken cancellationToken)
         {
 #if NETFRAMEWORK
             using var stream = client.GetStream();
@@ -155,11 +169,16 @@ namespace HRpc.Core
             }
             finally
             {
-                var endPoint = client.Client.RemoteEndPoint as IPEndPoint;
-                ClientDisconnected?.Invoke(this, new ConnectionEventArgs(
+                // Guarded so a throwing ClientDisconnected subscriber can't prevent client.Close()
+                // from running below.
+                SafeInvoke.EachHandler(ClientDisconnected, this, new ConnectionEventArgs(
                     endPoint?.Address.ToString() ?? string.Empty,
                     endPoint?.Port ?? 0
-                ));
+                ), ex =>
+                {
+                    System.Diagnostics.Trace.WriteLine(
+                        $"[HRpc] ClientDisconnected subscriber threw and was swallowed: {ex}");
+                });
 
                 client.Close();
             }
