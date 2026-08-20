@@ -24,31 +24,31 @@ It provides a consistent client/server abstraction for line-delimited JSON messa
 
 ### Core Types
 
-- `TcpEventFramework.Core.Connection` (unified TCP/Pipe client)
-- `TcpEventFramework.Core.Server` (unified TCP/Pipe server)
-- `TcpEventFramework.Core.TransportType` (enum: Tcp, Pipe)
-- `TcpEventFramework.Core.TcpClientWrapper`
-- `TcpEventFramework.Core.TcpServer`
-- `TcpEventFramework.Core.PipeServer`
-- `TcpEventFramework.Core.PipeClientWrapper`
-- `TcpEventFramework.Core.EventDispatcher`
-- `TcpEventFramework.Models.EventMessage`
-- `TcpEventFramework.Models.MessageEnvelope`
+- `HRpc.Core.Connection` (unified TCP/Pipe client)
+- `HRpc.Core.Server` (unified TCP/Pipe server)
+- `HRpc.Core.TransportType` (enum: Tcp, Pipe)
+- `HRpc.Core.TcpClientWrapper`
+- `HRpc.Core.TcpServer`
+- `HRpc.Core.PipeServer`
+- `HRpc.Core.PipeClientWrapper`
+- `HRpc.Core.EventDispatcher`
+- `HRpc.Models.EventMessage`
+- `HRpc.Models.MessageEnvelope`
 
 ### Interfaces
 
-- `TcpEventFramework.Interfaces.ITcpConnection`
-- `TcpEventFramework.Interfaces.ITcpClient`
-- `TcpEventFramework.Interfaces.IPipeConnection`
-- `TcpEventFramework.Interfaces.IPipeClient`
-- `TcpEventFramework.Interfaces.ITcpServer`
-- `TcpEventFramework.Interfaces.IEventMessage`
+- `HRpc.Interfaces.ITcpConnection`
+- `HRpc.Interfaces.ITcpClient`
+- `HRpc.Interfaces.IPipeConnection`
+- `HRpc.Interfaces.IPipeClient`
+- `HRpc.Interfaces.ITcpServer`
+- `HRpc.Interfaces.IEventMessage`
 
 ### Event Args
 
-- `TcpEventFramework.Events.MessageReceivedEventArgs`
-- `TcpEventFramework.Events.ConnectionEventArgs`
-- `TcpEventFramework.Events.ErrorEventArgs`
+- `HRpc.Events.MessageReceivedEventArgs`
+- `HRpc.Events.ConnectionEventArgs`
+- `HRpc.Events.ErrorEventArgs`
 
 ## Message Protocol
 
@@ -74,8 +74,8 @@ Notes:
 ## Recommended Usage
 
 ```csharp
-using TcpEventFramework.Core;
-using TcpEventFramework.Models;
+using HRpc.Core;
+using HRpc.Models;
 
 var dispatcher = new EventDispatcher();
 using var connection = new TcpClientWrapper();

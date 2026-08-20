@@ -1,10 +1,10 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using TcpEventFramework.Events;
-using ErrorEventArgs = TcpEventFramework.Events.ErrorEventArgs;
+using HRpc.Events;
+using ErrorEventArgs = HRpc.Events.ErrorEventArgs;
 
-namespace TcpEventFramework.Interfaces
+namespace HRpc.Interfaces
 {
     public interface ITcpServer
     {

@@ -1,6 +1,6 @@
 using System;
 
-namespace TcpEventFramework.Utils
+namespace HRpc.Utils
 {
     public static class Logger
     {

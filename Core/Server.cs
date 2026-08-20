@@ -1,12 +1,13 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using TcpEventFramework.Core;
-using TcpEventFramework.Events;
-using TcpEventFramework.Interfaces;
-using ErrorEventArgs = TcpEventFramework.Events.ErrorEventArgs;
+using HRpc.Core;
+using HRpc.Events;
+using HRpc.Interfaces;
+using HRpc.Utils;
+using ErrorEventArgs = HRpc.Events.ErrorEventArgs;
 
-namespace TcpEventFramework.Core
+namespace HRpc.Core
 {
     public class Server : IDisposable
     {
@@ -32,6 +33,12 @@ namespace TcpEventFramework.Core
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<ErrorEventArgs>? ErrorOccurred;
 
+        /// <summary>
+        /// Maximum size, in UTF-8 encoded bytes, of a single incoming message. Propagated to the
+        /// underlying transport server when <see cref="StartAsync"/> is called.
+        /// </summary>
+        public int MaxMessageSizeBytes { get; set; } = MessageSizeLimits.DefaultMaxMessageSizeBytes;
+
         public async Task StartAsync(string target, CancellationToken cancellationToken = default)
         {
             DisposeCurrentServer();
@@ -43,7 +50,7 @@ namespace TcpEventFramework.Core
                     throw new ArgumentException("For TCP, target must be a valid port number", nameof(target));
                 }
 
-                _tcpServer = new TcpServer();
+                _tcpServer = new TcpServer { MaxMessageSizeBytes = MaxMessageSizeBytes };
                 _tcpServer.ClientConnected += OnClientConnected;
                 _tcpServer.ClientDisconnected += OnClientDisconnected;
                 _tcpServer.MessageReceived += OnMessageReceived;
@@ -53,7 +60,7 @@ namespace TcpEventFramework.Core
             }
             else if (TransportType == TransportType.Pipe)
             {
-                _pipeServer = new PipeServer();
+                _pipeServer = new PipeServer { MaxMessageSizeBytes = MaxMessageSizeBytes };
                 _pipeServer.ClientConnected += OnClientConnected;
                 _pipeServer.ClientDisconnected += OnClientDisconnected;
                 _pipeServer.MessageReceived += OnMessageReceived;

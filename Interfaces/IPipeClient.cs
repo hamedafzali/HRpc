@@ -1,4 +1,4 @@
-namespace TcpEventFramework.Interfaces
+namespace HRpc.Interfaces
 {
     public interface IPipeClient : IPipeConnection
     {

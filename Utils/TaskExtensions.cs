@@ -2,7 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace TcpEventFramework.Utils
+namespace HRpc.Utils
 {
     internal static class TaskExtensions
     {

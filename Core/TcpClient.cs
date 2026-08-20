@@ -1,6 +1,6 @@
-using TcpEventFramework.Interfaces;
+using HRpc.Interfaces;
 
-namespace TcpEventFramework.Core
+namespace HRpc.Core
 {
     public class TcpClientWrapper : TcpConnection, ITcpClient
     {

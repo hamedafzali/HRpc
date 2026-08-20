@@ -5,13 +5,13 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
-using TcpEventFramework.Events;
-using TcpEventFramework.Interfaces;
-using TcpEventFramework.Models;
-using TcpEventFramework.Utils;
-using ErrorEventArgs = TcpEventFramework.Events.ErrorEventArgs;
+using HRpc.Events;
+using HRpc.Interfaces;
+using HRpc.Models;
+using HRpc.Utils;
+using ErrorEventArgs = HRpc.Events.ErrorEventArgs;
 
-namespace TcpEventFramework.Core
+namespace HRpc.Core
 {
     public class TcpServer : ITcpServer
     {
@@ -25,9 +25,30 @@ namespace TcpEventFramework.Core
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<ErrorEventArgs>? ErrorOccurred;
 
+        /// <summary>
+        /// Maximum size, in UTF-8 encoded bytes, of a single incoming message. A client that
+        /// exceeds this before sending a newline terminator causes <see cref="ErrorOccurred"/> to
+        /// fire with a <see cref="LineTooLongException"/> and that client's connection to be
+        /// closed. Applies to connections accepted after this is set.
+        /// </summary>
+        public int MaxMessageSizeBytes { get; set; } = MessageSizeLimits.DefaultMaxMessageSizeBytes;
+
+        /// <summary>
+        /// Raises <see cref="ErrorOccurred"/>, guarding each subscriber individually (see
+        /// <see cref="SafeInvoke"/>) so a throwing subscriber can't affect the server any more
+        /// than a throwing <see cref="MessageReceived"/> subscriber can. A subscriber that
+        /// throws here is itself swallowed rather than re-raised: there is no further event to
+        /// escalate to without risking unbounded recursion if that subscriber throws on every
+        /// call. The swallowed exception is written to <see cref="System.Diagnostics.Trace"/> (F-2)
+        /// so a buggy ErrorOccurred handler doesn't produce total silence — see PROTOCOL.md.
+        /// </summary>
         protected void OnErrorOccurred(string message, Exception? ex = null)
         {
-            ErrorOccurred?.Invoke(this, new ErrorEventArgs(message, ex));
+            SafeInvoke.EachHandler(ErrorOccurred, this, new ErrorEventArgs(message, ex), subscriberEx =>
+            {
+                System.Diagnostics.Trace.WriteLine(
+                    $"[HRpc] ErrorOccurred subscriber threw and was swallowed: {subscriberEx}");
+            });
         }
 
         public async Task StartAsync(int port, CancellationToken cancellationToken = default)
@@ -91,22 +112,37 @@ namespace TcpEventFramework.Core
 #else
             await using var stream = client.GetStream();
 #endif
-            using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+            var reader = new BoundedLineReader(stream, MaxMessageSizeBytes);
 
             try
             {
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    var line = await reader.ReadLineAsync().WithCancellation(cancellationToken);
+                    var line = await reader.ReadLineAsync(cancellationToken);
                     if (line == null)
                     {
                         break;
                     }
 
-                    var message = MessageEnvelope.Deserialize(line);
-                    MessageReceived?.Invoke(this, new MessageReceivedEventArgs(
-                        new EventMessage(message.EventName, message.Payload)
-                    ));
+                    MessageEnvelope message;
+                    try
+                    {
+                        message = MessageEnvelope.Deserialize(line);
+                    }
+                    catch (Exception ex) when (ReceiveLoopErrors.IsRecoverableParseFailure(ex))
+                    {
+                        // Recoverable: the line boundary is intact, so resynchronization is free.
+                        // Skip this message and keep reading rather than killing the connection.
+                        // Anything not a genuine parse failure (UnsupportedProtocolVersionException,
+                        // OperationCanceledException, or a non-parse bug) falls through this filter
+                        // and is handled by the outer catch below instead.
+                        OnErrorOccurred(ex.Message, ex);
+                        continue;
+                    }
+
+                    SafeInvoke.EachHandler(MessageReceived, this,
+                        new MessageReceivedEventArgs(new EventMessage(message.EventName, message.PayloadValue)),
+                        ex => OnErrorOccurred("Unhandled exception in MessageReceived subscriber", ex));
                 }
             }
             catch (OperationCanceledException)

@@ -1,6 +1,6 @@
 using System;
 
-namespace TcpEventFramework.Events
+namespace HRpc.Events
 {
     public class ErrorEventArgs : EventArgs
 {
