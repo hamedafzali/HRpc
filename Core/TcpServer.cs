@@ -63,6 +63,18 @@ namespace HRpc.Core
             _running = true;
             _serverCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var serverToken = _serverCts.Token;
+            var listener = _listener;
+
+            // On net48, AcceptTcpClientAsync() has no CancellationToken-aware overload, so a
+            // pending accept never observes serverToken becoming cancelled on its own. Stop()
+            // disposes the listener socket, unblocking the pending accept as an
+            // ObjectDisposedException, which the catch below treats as clean shutdown since
+            // serverToken.IsCancellationRequested is true. On net8.0/net9.0 this is redundant
+            // with AcceptTcpClientAsync's native cancellation support but harmless.
+            using var cancellationRegistration = serverToken.Register(() =>
+            {
+                try { listener.Stop(); } catch (ObjectDisposedException) { }
+            });
 
             try
             {

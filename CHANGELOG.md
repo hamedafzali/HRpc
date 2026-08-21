@@ -27,6 +27,16 @@ All notable changes to HRpc are documented in this file.
   scoped: `ObjectDisposedException` is treated as clean shutdown only when our own
   cancellation was already requested, so an unrelated/genuine `ObjectDisposedException`
   still surfaces normally.
+- **`TcpServer.StartAsync` could hang forever on net48 if the caller cancelled the token
+  without also calling `StopAsync`.** `TcpListener.AcceptTcpClientAsync()` has no
+  `CancellationToken`-aware overload on net48, so a pending accept never observed the
+  token becoming cancelled — nothing else was calling `Stop()` on it, so the accept
+  blocked indefinitely. This was previously masked by the `ObjectDisposedException`
+  crash above, since a run never got past that failure to reach this path. Fixed by
+  registering a callback on the token that stops the listener, which unblocks the
+  pending accept as the same `ObjectDisposedException` the shutdown catch above already
+  treats as clean cancellation. No effect on net8.0/net9.0, which already cancel
+  natively via the token-accepting overload.
 - **A throwing `Disconnected`/`ClientDisconnected` subscriber could abort cleanup.**
   These events were invoked unguarded from inside `finally` blocks (`TcpConnection`,
   `PipeConnection`, `TcpServer.HandleClientAsync`, `PipeServer.HandleClientAsync`), so an
