@@ -4,7 +4,15 @@ All notable changes to HRpc are documented in this file.
 
 ## [Unreleased]
 
-### Fixed
+## [1.2.0] - 2026-08-20
+
+If you are upgrading from 1.1.x, read this entire entry before touching code. This
+release lands **five breaking changes at once**: a namespace rename, a wire-format
+change, an interface change, a dropped-TFM change, and (implicitly) a behavior change
+around what "the connection died" means. None of them are individually large, but
+skipping one will produce a failure that looks unrelated to the upgrade.
+
+### Fixed (found by CI on `stabilize/v1.2.0`, before first release)
 
 - **Disconnect/teardown could throw `ObjectDisposedException` out of `CloseAsync`,
   sometimes suppressing `Disconnected`/`ClientDisconnected` entirely.** `TcpConnection`
@@ -65,13 +73,12 @@ All notable changes to HRpc are documented in this file.
   always throws. Switched net48 to `await Task.FromCanceled(cancellationToken)` so both
   paths throw the same, more specific exception type.
 
-## [1.2.0] - 2026-08-20
-
-If you are upgrading from 1.1.x, read this entire entry before touching code. This
-release lands **five breaking changes at once**: a namespace rename, a wire-format
-change, an interface change, a dropped-TFM change, and (implicitly) a behavior change
-around what "the connection died" means. None of them are individually large, but
-skipping one will produce a failure that looks unrelated to the upgrade.
+  > Both of the exception-type fixes above (`GetPayload<T>` and `ConnectAsync`) change
+  > the concrete exception type a net48 caller observes. Since neither shipped in any
+  > prior release, this is not a breaking change to already-shipped 1.2.0 behavior —
+  > but if you wrote code against a pre-release `stabilize/v1.2.0` build that `catch`es
+  > `FormatException` or `OperationCanceledException` specifically at these two call
+  > sites, update it to the types above.
 
 ### Migration order
 
