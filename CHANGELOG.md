@@ -47,6 +47,24 @@ All notable changes to HRpc are documented in this file.
   `MessageReceived`/`ErrorOccurred`; a throwing subscriber is swallowed and traced rather
   than propagated.
 
+- **`GetPayload<T>()` threw a raw `FormatException` instead of a `JsonException` for a
+  type-mismatched payload, net48 only.** `JToken.ToObject<T>()` falls through to
+  `Convert.ChangeType` for primitive-type coercion (e.g. requesting a string payload as
+  `int`), which throws `FormatException`/`OverflowException`/`InvalidCastException`
+  directly rather than wrapping it, unlike `System.Text.Json`'s
+  `JsonElement.Deserialize<T>()`, which always throws `JsonException` for the equivalent
+  shape mismatch. `GetPayload<T>()` now normalizes these into
+  `Newtonsoft.Json.JsonException` on net48 so callers see one exception type for a
+  payload/type mismatch regardless of which serializer backs the current target
+  framework.
+- **`ConnectAsync` threw `OperationCanceledException` instead of `TaskCanceledException`
+  for a pre-cancelled token, net48 only.** The net48 path used
+  `cancellationToken.ThrowIfCancellationRequested()`, which throws the bare base type;
+  net8.0/net9.0's `TcpClient.ConnectAsync(..., cancellationToken)` overload throws
+  `TaskCanceledException` specifically, since that's what a canceled `Task`'s awaiter
+  always throws. Switched net48 to `await Task.FromCanceled(cancellationToken)` so both
+  paths throw the same, more specific exception type.
+
 ## [1.2.0] - 2026-08-20
 
 If you are upgrading from 1.1.x, read this entire entry before touching code. This

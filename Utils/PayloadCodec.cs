@@ -38,7 +38,22 @@ namespace HRpc.Utils
                 return (T)(object)(payloadValue.Value<string>() ?? string.Empty);
             }
 
-            return payloadValue.ToObject<T>();
+            try
+            {
+                return payloadValue.ToObject<T>();
+            }
+            catch (Exception ex) when (ex is FormatException or OverflowException or InvalidCastException)
+            {
+                // JToken.ToObject<T> falls through to Convert.ChangeType for primitive-type
+                // coercion (e.g. a JSON string payload requested as int), which throws
+                // FormatException/OverflowException/InvalidCastException directly instead of
+                // Newtonsoft.Json.JsonException. System.Text.Json's JsonElement.Deserialize<T>
+                // always throws JsonException for the equivalent shape mismatch. Normalize so
+                // GetPayload<T> throws one exception type regardless of which serializer backs
+                // the current target framework.
+                throw new Newtonsoft.Json.JsonException(
+                    $"Could not convert payload to {typeof(T)}.", ex);
+            }
         }
 
         public static string GetPayloadAsString(JToken payloadValue)

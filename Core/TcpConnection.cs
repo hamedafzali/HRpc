@@ -85,7 +85,17 @@ namespace HRpc.Core
             {
                 _client = new TcpClient();
 #if NETFRAMEWORK
-                cancellationToken.ThrowIfCancellationRequested();
+                // Task.FromCanceled + await, not ThrowIfCancellationRequested: the latter
+                // throws a bare OperationCanceledException, but a canceled Task always
+                // completes its awaiter with TaskCanceledException specifically — the same
+                // type net8.0/net9.0 callers observe from the CancellationToken-aware
+                // ConnectAsync overload below. Keeping the exception type consistent across
+                // targets matters to callers that catch TaskCanceledException specifically.
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    await Task.FromCanceled(cancellationToken).ConfigureAwait(false);
+                }
+
                 await _client.ConnectAsync(host, port);
 #else
                 await _client.ConnectAsync(host, port, cancellationToken);
