@@ -1,0 +1,141 @@
+name: Publish
+
+# Triggered by pushing a tag, not by a published GitHub Release. This keeps the release
+# flow to a single command (`git tag vX.Y.Z && git push origin vX.Y.Z`) with no separate
+# "create a Release" UI step, and works identically for stable and -preview tags.
+#
+# Tag -> channel:
+#   v1.2.0            -> stable   (no "-" in the version part)
+#   v1.3.0-preview.1  -> preview  (has a "-<suffix>" prerelease part)
+#
+# To cut a release:
+#   Stable:   git tag v1.2.0             && git push origin v1.2.0
+#   Preview:  git tag v1.3.0-preview.1   && git push origin v1.3.0-preview.1
+#
+# The NuGet package version is taken ENTIRELY from the tag (via /p:Version=), not from
+# HRpc.csproj's static <Version> -- the tag is the single source of truth for what gets
+# published, so the csproj's <Version> is only a "last stable I built" convenience value
+# for local `dotnet pack` runs and never controls what a tag push actually publishes.
+#
+# Recommendation for any preview cut AFTER a stable release with the same X.Y.Z base
+# (e.g. a preview.2 for 1.2.0 after 1.2.0 already shipped): don't reuse the shipped base
+# version. The guard below is a simple version-string comparison (see the step below for
+# why), which does not reliably encode real SemVer prerelease precedence (where
+# "1.2.0-preview.1" sorts BEFORE "1.2.0"). Always bump to the next base version for a new
+# preview cycle (e.g. "1.3.0-preview.1"), which sidesteps the ambiguity entirely and is
+# the conventional approach anyway.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run_version:
+        description: >
+          Version to simulate for a dry run. Exercises build, test, pack, and the
+          version guard against this value. The two nuget push steps are skipped
+          unconditionally for workflow_dispatch runs -- this input can never cause
+          a real publish, no matter what value is given.
+        required: true
+        default: "0.0.0-dryrun"
+
+jobs:
+  # Re-run the full build+test matrix on the tagged commit before publishing anything --
+  # a tag alone proves nothing about the commit's state. ci.yml is a reusable workflow
+  # (workflow_call), so this literally reruns the same net48-Windows / net8.0+net9.0-Linux
+  # jobs used for ordinary pushes and PRs.
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Pack & Publish
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Derive version and channel
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.dry_run_version }}"
+            echo "Dry run (workflow_dispatch) -> simulated version $VERSION"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+            echo "Tag $TAG -> version $VERSION"
+          fi
+          if [[ "$VERSION" == *-* ]]; then
+            CHANNEL="preview"
+          else
+            CHANNEL="stable"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "-> $VERSION ($CHANNEL channel)"
+
+      - name: Guard against publishing <= the last published version
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          RESPONSE=$(curl -s -w "\n%{http_code}" https://api.nuget.org/v3-flatcontainer/hrpc/index.json)
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" = "404" ]; then
+            echo "No prior published versions found (404) -- treating as first-ever publish."
+            LAST="0.0.0"
+          elif [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Unexpected HTTP $HTTP_CODE from NuGet.org while checking published versions. Aborting rather than guessing."
+            exit 1
+          else
+            LAST=$(echo "$BODY" | jq -r '.versions[]' 2>/dev/null | sort -V | tail -n1)
+            if [ -z "$LAST" ]; then
+              echo "::error::NuGet.org returned HTTP 200 but no parseable version list (unexpected response shape). Aborting rather than assuming this is safe to publish."
+              exit 1
+            fi
+            echo "Last published version: $LAST"
+          fi
+
+          HIGHEST=$(printf '%s\n%s\n' "$LAST" "$VERSION" | sort -V | tail -n1)
+          if [ "$HIGHEST" != "$VERSION" ] || [ "$VERSION" = "$LAST" ]; then
+            echo "::error::Refusing to publish $VERSION: it is not strictly newer than the last published version ($LAST)."
+            exit 1
+          fi
+
+          echo "OK: $VERSION > $LAST"
+
+      - name: Pack
+        run: |
+          dotnet pack HRpc.csproj -c Release \
+            /p:Version=${{ steps.version.outputs.version }} \
+            -o ./artifacts
+
+      - name: Push .nupkg to NuGet.org
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          dotnet nuget push "./artifacts/*.nupkg" \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - name: Push .snupkg (symbols) to NuGet.org
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          dotnet nuget push "./artifacts/*.snupkg" \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - name: Dry run complete (no push performed)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "workflow_dispatch dry run finished: build, test, pack, and the version guard all ran against $VERSION. Nothing was pushed to NuGet.org -- the push steps are unconditionally skipped for this trigger."
+        env:
+          VERSION: ${{ steps.version.outputs.version }}

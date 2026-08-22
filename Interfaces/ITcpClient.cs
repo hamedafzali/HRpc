@@ -1,6 +1,6 @@
 using System.Threading.Tasks;
 
-namespace TcpEventFramework.Interfaces
+namespace HRpc.Interfaces
 {
     public interface ITcpClient : ITcpConnection
     {

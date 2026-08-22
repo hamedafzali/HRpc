@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"] # every branch, so pushing a feature/stabilization branch runs CI, not just main
+  pull_request:
+    branches: [main]
+  workflow_call: {} # allows publish.yml to reuse this exact build+test matrix before publishing
+
+env:
+  # Fail the build on any compiler warning, not just errors.
+  BUILD_ARGS: -c Release /p:TreatWarningsAsErrors=true /warnaserror
+
+jobs:
+  # net48 is .NET Framework, which only runs on Windows -- this leg cannot run on
+  # ubuntu-latest/macos-latest no matter how the workflow is written. It is also the ONLY
+  # leg that requires Windows: net8.0/net9.0 run fine (build and test) on any OS, so they
+  # run on ubuntu-latest below to keep the matrix fast and cheap.
+  test-net48-windows:
+    name: Build & Test (net48, windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Restore
+        run: dotnet restore HRpc.sln
+
+      - name: Build (net48)
+        run: dotnet build HRpc.sln -f net48 ${{ env.BUILD_ARGS }} --no-restore
+
+      - name: Test (net48 -- Newtonsoft.Json serializer path)
+        run: dotnet test Tests/HRpc.Tests.csproj -f net48 -c Release --no-build --logger "console;verbosity=normal"
+
+  test-linux:
+    name: Build & Test (${{ matrix.tfm }}, ubuntu-latest)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tfm: [net8.0, net9.0]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Restore
+        run: dotnet restore HRpc.sln
+
+      - name: Build (${{ matrix.tfm }})
+        run: dotnet build HRpc.sln -f ${{ matrix.tfm }} ${{ env.BUILD_ARGS }} --no-restore
+
+      - name: Test (${{ matrix.tfm }} -- System.Text.Json serializer path)
+        run: dotnet test Tests/HRpc.Tests.csproj -f ${{ matrix.tfm }} -c Release --no-build --logger "console;verbosity=normal"
+
+  # Informational only -- does not gate the build. The local dev sandbox this repo was
+  # retargeted in only had the 9.0.304 SDK installed (NETSDK1045 for net10.0), which was
+  # confirmed to be an SDK-availability limit, not a code issue. GitHub-hosted runner images
+  # move faster than that sandbox; this job finds out whether net10.0 already builds cleanly
+  # here without committing to it as a supported TFM yet.
+  net10-preview-check:
+    name: net10.0 build check (informational, non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore HRpc.csproj
+
+      - name: Build HRpc.csproj against net10.0
+        run: dotnet build HRpc.csproj -c Release /p:TargetFrameworks=net48%3Bnet8.0%3Bnet9.0%3Bnet10.0 -f net10.0

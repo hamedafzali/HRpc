@@ -5,13 +5,13 @@ using System.IO.Pipes;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using TcpEventFramework.Events;
-using TcpEventFramework.Interfaces;
-using TcpEventFramework.Models;
-using TcpEventFramework.Utils;
-using ErrorEventArgs = TcpEventFramework.Events.ErrorEventArgs;
+using HRpc.Events;
+using HRpc.Interfaces;
+using HRpc.Models;
+using HRpc.Utils;
+using ErrorEventArgs = HRpc.Events.ErrorEventArgs;
 
-namespace TcpEventFramework.Core
+namespace HRpc.Core
 {
     public class PipeServer : ITcpServer, IDisposable
     {
@@ -28,14 +28,36 @@ namespace TcpEventFramework.Core
         // Optional message to send upon client connection
         public IEventMessage? InitialMessage { get; set; }
 
+        /// <summary>
+        /// Maximum size, in UTF-8 encoded bytes, of a single incoming message. A client that
+        /// exceeds this before sending a newline terminator causes <see cref="ErrorOccurred"/> to
+        /// fire with a <see cref="LineTooLongException"/> and that client's connection to be
+        /// closed. Applies to connections accepted after this is set.
+        /// </summary>
+        public int MaxMessageSizeBytes { get; set; } = MessageSizeLimits.DefaultMaxMessageSizeBytes;
+
+        /// <summary>
+        /// Raises <see cref="ErrorOccurred"/>, guarding each subscriber individually (see
+        /// <see cref="SafeInvoke"/>) so a throwing subscriber can't affect the server any more
+        /// than a throwing <see cref="MessageReceived"/> subscriber can. A subscriber that
+        /// throws here is itself swallowed rather than re-raised: there is no further event to
+        /// escalate to without risking unbounded recursion if that subscriber throws on every
+        /// call. The swallowed exception is written to <see cref="System.Diagnostics.Trace"/> (F-2)
+        /// so a buggy ErrorOccurred handler doesn't produce total silence — see PROTOCOL.md.
+        /// </summary>
         protected void OnErrorOccurred(string message, Exception? ex = null)
         {
-            ErrorOccurred?.Invoke(this, new ErrorEventArgs(message, ex));
+            SafeInvoke.EachHandler(ErrorOccurred, this, new ErrorEventArgs(message, ex), subscriberEx =>
+            {
+                System.Diagnostics.Trace.WriteLine(
+                    $"[HRpc] ErrorOccurred subscriber threw and was swallowed: {subscriberEx}");
+            });
         }
 
-        public async Task StartAsync(int port, CancellationToken cancellationToken = default)
+        public Task StartAsync(int port, CancellationToken cancellationToken = default)
         {
-            throw new NotSupportedException("PipeServer does not support port-based StartAsync. Use StartAsync(pipeName, cancellationToken).");
+            return Task.FromException(new NotSupportedException(
+                "PipeServer does not support port-based StartAsync. Use StartAsync(pipeName, cancellationToken)."));
         }
 
         public async Task StartAsync(string pipeName, CancellationToken cancellationToken = default)
@@ -115,32 +137,46 @@ namespace TcpEventFramework.Core
 
         private async Task HandleClientAsync(NamedPipeServerStream stream, CancellationToken cancellationToken)
         {
-            using var reader = new StreamReader(stream, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
+            var reader = new BoundedLineReader(stream, MaxMessageSizeBytes);
 
             try
             {
                 // Send initial message if configured
                 if (InitialMessage != null)
                 {
-                    var envelope = new MessageEnvelope
-                    {
-                        EventName = InitialMessage.EventName,
-                        Payload = InitialMessage.Payload
-                    };
+                    var envelope = new MessageEnvelope(InitialMessage.EventName, InitialMessage.PayloadValue);
                     var bytes = Encoding.UTF8.GetBytes(envelope.Serialize() + "\n");
                     await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
                 }
 
-                var line = await reader.ReadLineAsync().WithCancellation(cancellationToken).ConfigureAwait(false);
-                if (line == null)
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    return;
-                }
+                    var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+                    if (line == null)
+                    {
+                        break;
+                    }
 
-                var message = MessageEnvelope.Deserialize(line);
-                MessageReceived?.Invoke(this, new MessageReceivedEventArgs(
-                    new EventMessage(message.EventName, message.Payload)
-                ));
+                    MessageEnvelope message;
+                    try
+                    {
+                        message = MessageEnvelope.Deserialize(line);
+                    }
+                    catch (Exception ex) when (ReceiveLoopErrors.IsRecoverableParseFailure(ex))
+                    {
+                        // Recoverable: the line boundary is intact, so resynchronization is free.
+                        // Skip this message and keep reading rather than killing the connection.
+                        // Anything not a genuine parse failure (UnsupportedProtocolVersionException,
+                        // OperationCanceledException, or a non-parse bug) falls through this filter
+                        // and is handled by the outer catch below instead.
+                        OnErrorOccurred(ex.Message, ex);
+                        continue;
+                    }
+
+                    SafeInvoke.EachHandler(MessageReceived, this,
+                        new MessageReceivedEventArgs(new EventMessage(message.EventName, message.PayloadValue)),
+                        ex => OnErrorOccurred("Unhandled exception in MessageReceived subscriber", ex));
+                }
             }
             catch (OperationCanceledException)
             {
@@ -152,7 +188,13 @@ namespace TcpEventFramework.Core
             }
             finally
             {
-                ClientDisconnected?.Invoke(this, new ConnectionEventArgs(_pipeName, 0));
+                // Guarded so a throwing ClientDisconnected subscriber can't prevent stream.Dispose()
+                // from running below.
+                SafeInvoke.EachHandler(ClientDisconnected, this, new ConnectionEventArgs(_pipeName, 0), ex =>
+                {
+                    System.Diagnostics.Trace.WriteLine(
+                        $"[HRpc] ClientDisconnected subscriber threw and was swallowed: {ex}");
+                });
 
                 try
                 {

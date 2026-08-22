@@ -1,10 +1,10 @@
 using System;
 using System.Threading.Tasks;
 
-using TcpEventFramework.Interfaces;
-using TcpEventFramework.Events;
+using HRpc.Interfaces;
+using HRpc.Events;
 
-namespace TcpEventFramework.Core
+namespace HRpc.Core
 {
     public class EventDispatcher
     {

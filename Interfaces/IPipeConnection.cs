@@ -1,7 +1,7 @@
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace TcpEventFramework.Interfaces
+namespace HRpc.Interfaces
 {
     public interface IPipeConnection : ITcpConnection
     {

@@ -1,7 +1,7 @@
 using System;
-using TcpEventFramework.Interfaces;
+using HRpc.Interfaces;
 
-namespace TcpEventFramework.Events
+namespace HRpc.Events
 {
     public class MessageReceivedEventArgs : EventArgs
     {

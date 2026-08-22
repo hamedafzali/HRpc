@@ -1,20 +1,33 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net48;net6.0;net7.0;net9.0</TargetFrameworks>
+    <TargetFrameworks>net48;net8.0;net9.0</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Nullable>enable</Nullable>
-    <Version>1.1.1</Version>
+    <Version>1.2.0</Version>
     <Authors>Hamed Afzali</Authors>
     <Company>PixelWizards</Company>
     <Description>HRpc - Event-driven messaging framework for .NET (TCP and local Named Pipes)</Description>
     <PackageProjectUrl>https://github.com/hamedafzali/HRpc</PackageProjectUrl>
     <RepositoryUrl>https://github.com/hamedafzali/HRpc</RepositoryUrl>
-    <PackageTags>TCP;NamedPipes;Events;Networking;Client;Server;RPC;IPC</PackageTags>
+    <PackageTags>ipc;named-pipes;tcp;messaging;eventbus;duplex;desktop;dotnet;rpc;csharp</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- TODO: no PackageIcon set — no image file available yet. Once one is added
+         (e.g. icon.png, 128x128), wire it up with <PackageIcon>icon.png</PackageIcon>
+         plus a matching <None Include="icon.png" Pack="true" PackagePath="\" /> item. -->
+
+    <!-- SourceLink / deterministic build -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+
+    <!-- Symbol package -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
@@ -25,6 +38,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 

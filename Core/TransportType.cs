@@ -1,4 +1,4 @@
-namespace TcpEventFramework
+namespace HRpc
 {
     public enum TransportType
     {
