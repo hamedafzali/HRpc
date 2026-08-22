@@ -111,10 +111,26 @@ jobs:
 
           echo "OK: $VERSION > $LAST"
 
+      - name: Build
+        # A bare `dotnet pack` on this multi-targeted (net48;net8.0;net9.0) project
+        # unreliably skips building one or more TFMs before packing -- reproduced locally
+        # and in CI as NU5026 ("...bin/Release/net48/HRpc.dll...not found on disk"),
+        # deterministically, even though `dotnet pack` is documented to build implicitly.
+        # Building explicitly first, then packing with --no-build below, avoids relying on
+        # that implicit multi-target build path at all.
+        run: |
+          dotnet build HRpc.csproj -c Release \
+            /p:Version=${{ steps.version.outputs.version }}
+
       - name: Pack
+        # --no-build: pack exactly what Build just produced, rather than triggering another
+        # (potentially inconsistent) implicit build. /p:Version is passed again so the
+        # nuspec's package version matches what Build was told to stamp -- pack does not
+        # infer it from the prior Build invocation.
         run: |
           dotnet pack HRpc.csproj -c Release \
             /p:Version=${{ steps.version.outputs.version }} \
+            --no-build \
             -o ./artifacts
 
       - name: Push .nupkg to NuGet.org
