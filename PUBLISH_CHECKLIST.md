@@ -16,7 +16,14 @@
 
 ## 3. Publish
 
-- [ ] `dotnet nuget push "/Users/hamed.afzali/Desktop/Repos/HRpc/artifacts/HRpc.<VERSION>.nupkg" --api-key "<NUGET_API_KEY>" --source "https://api.nuget.org/v3/index.json" --skip-duplicate`
+Normal path: push a `v<VERSION>` tag and let `.github/workflows/publish.yml` publish via
+NuGet Trusted Publishing (OIDC) — no API key involved.
+
+Manual/local fallback only (Trusted Publishing's OIDC exchange only works inside the
+GitHub Actions run, not from a local machine — this needs a real API key from
+nuget.org's "API Keys" page, short-lived or otherwise):
+
+- [ ] `dotnet nuget push "/Users/hamed.afzali/Desktop/Repos/HRpc/artifacts/HRpc.<VERSION>.nupkg" --api-key "<your-nuget.org-api-key>" --source "https://api.nuget.org/v3/index.json" --skip-duplicate`
 
 ## 4. Post-publish
 
