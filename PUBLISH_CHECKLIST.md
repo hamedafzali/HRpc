@@ -16,12 +16,14 @@
 
 ## 3. Publish
 
-Normal path: push a `v<VERSION>` tag and let `.github/workflows/publish.yml` publish via
-NuGet Trusted Publishing (OIDC) — no API key involved.
+Normal path (CURRENT): push a `v<VERSION>` tag and let `.github/workflows/publish.yml`
+publish using the `NUGET_API_KEY` repo secret. This is a stopgap — NuGet Trusted
+Publishing (OIDC, no stored key) is the intended end state but is parked pending a
+NuGet support ticket after the token exchange repeatedly 401'd with a confirmed-correct
+username and a policy visibly present on nuget.org with matching fields; see
+`project.md`'s Release Runbook for the full detail.
 
-Manual/local fallback only (Trusted Publishing's OIDC exchange only works inside the
-GitHub Actions run, not from a local machine — this needs a real API key from
-nuget.org's "API Keys" page, short-lived or otherwise):
+Manual/local fallback only (needs a real API key from nuget.org's "API Keys" page):
 
 - [ ] `dotnet nuget push "/Users/hamed.afzali/Desktop/Repos/HRpc/artifacts/HRpc.<VERSION>.nupkg" --api-key "<your-nuget.org-api-key>" --source "https://api.nuget.org/v3/index.json" --skip-duplicate`
 

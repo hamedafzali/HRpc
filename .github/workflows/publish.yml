@@ -52,12 +52,7 @@ jobs:
     name: Pack & Publish
     needs: test
     runs-on: ubuntu-latest
-    # No GitHub environment: Trusted Publishing doesn't require one, and this repo has a
-    # single maintainer -- required reviewers/wait timers would just add self-approval
-    # friction to every release. NUGET_USER is a plain repo secret instead. If that changes,
-    # add `environment: release` here and set the matching field on the nuget.org policy.
     permissions:
-      id-token: write # required for NuGet/login's OIDC token exchange (trusted publishing)
       contents: read
     steps:
       - uses: actions/checkout@v4
@@ -138,20 +133,14 @@ jobs:
             --no-build \
             -o ./artifacts
 
-      - name: NuGet login (OIDC trusted publishing)
-        # Only runs for real (tag-triggered) publishes -- dry runs never request a token, so
-        # workflow_dispatch stays fully credential-free, not just "doesn't push with one".
-        if: github.event_name != 'workflow_dispatch'
-        id: login
-        uses: NuGet/login@v1
-        with:
-          user: ${{ secrets.NUGET_USER }} # nuget.org profile name, NOT email
-
       - name: Push .nupkg to NuGet.org
+        # STOPGAP: uses the long-lived NUGET_API_KEY repo secret. Trusted Publishing (OIDC,
+        # via NuGet/login@v1) is the intended end state -- see the linked debug writeup for
+        # why it's parked for now. Switch back once that's resolved.
         if: github.event_name != 'workflow_dispatch'
         run: |
           dotnet nuget push "./artifacts/*.nupkg" \
-            --api-key ${{ steps.login.outputs.NUGET_API_KEY }} \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
 
@@ -159,7 +148,7 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         run: |
           dotnet nuget push "./artifacts/*.snupkg" \
-            --api-key ${{ steps.login.outputs.NUGET_API_KEY }} \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
 

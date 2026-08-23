@@ -142,11 +142,19 @@ Publishing is automated by `.github/workflows/publish.yml`, triggered by pushing
 version is derived from the tag (not from `HRpc.csproj`'s `<Version>`, which is
 overridden via `/p:Version=` at pack time and is only a local-build convenience), a
 version guard rejects any tag not strictly greater than the highest version already on
-NuGet, then it packs and pushes both `.nupkg` and `.snupkg` to nuget.org via NuGet
-Trusted Publishing (OIDC): the `publish` job requests a GitHub-issued OIDC token,
-exchanges it for a short-lived NuGet API key via `NuGet/login@v1` (using the `NUGET_USER`
-repo secret to identify the nuget.org account), and uses that key for both pushes. No
-long-lived `NUGET_API_KEY` secret is stored or used by CI.
+NuGet, then it packs and pushes both `.nupkg` and `.snupkg` to nuget.org using the
+`NUGET_API_KEY` repository secret (CURRENT, stopgap).
+
+**Intended end state is NuGet Trusted Publishing (OIDC)**, not the long-lived API key:
+the `publish` job would request a GitHub-issued OIDC token and exchange it for a
+short-lived NuGet API key via `NuGet/login@v1` (using a `NUGET_USER` repo secret to
+identify the nuget.org account), eliminating `NUGET_API_KEY` entirely. This was tried
+first (see `chore/nuget-trusted-publishing`, merged, then reverted in
+`revert/nuget-api-key-stopgap`) but the token exchange consistently returned HTTP 401
+"No matching trust policy owned by user" even with a confirmed-correct username and a
+policy visibly present on nuget.org with matching fields (Owner/Repo/Workflow file) --
+every field-mismatch explanation in nuget.org's own validator source was ruled out.
+Parked pending a NuGet support ticket / `NuGet/login` issue; switch back once resolved.
 
 It also supports a `workflow_dispatch` dry run (build/test/pack/version-guard only, no
 push, no secret required) — see `PUBLISH_CHECKLIST.md` for the exact commands.
