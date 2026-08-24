@@ -4,13 +4,59 @@ All notable changes to HRpc are documented in this file.
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-08-20
+## [1.2.0] - 2026-08-24
 
 If you are upgrading from 1.1.x, read this entire entry before touching code. This
 release lands **five breaking changes at once**: a namespace rename, a wire-format
 change, an interface change, a dropped-TFM change, and (implicitly) a behavior change
 around what "the connection died" means. None of them are individually large, but
 skipping one will produce a failure that looks unrelated to the upgrade.
+
+### Fixed (found by a fresh-consumer test against the published `1.2.0-preview.2`
+package, after CI was already green — before stable)
+
+Every fix above this point was found by CI/unit tests run against source. These two
+were only found by installing `1.2.0-preview.2` from nuget.org into a brand-new
+project, as a first-time consumer would, and following the README exactly — proof
+that "CI is green" and "the README's own examples work for a new user" are not the
+same claim.
+
+- **`server.StartAsync(...)`, called exactly as every README example calls it,
+  deadlocked forever.** `TcpServer.StartAsync`/`PipeServer.StartAsync` ran their
+  entire accept loop inline inside the `async Task` method body, so the returned
+  `Task` only completed once the server was stopped — meaning `await
+  server.StartAsync(...)` never returned while the server was up. This bug predates
+  1.2.0 entirely (present since the library's first commit, confirmed via `git log`)
+  but had never been caught because every existing test used a fire-and-forget
+  `var serverTask = server.StartAsync(...)` pattern rather than the README's plain
+  `await`. Fixed: `StartAsync` now performs synchronous setup (bind/listen, or pipe
+  validation) and returns as soon as the server is actually listening; the accept
+  loop runs as a tracked background task that `StopAsync` now awaits during
+  teardown. No signature change — existing fire-and-forget callers are unaffected.
+- **`GetPayload<T>()`/`TryGetPayload<T>()` silently returned a `T` with every member
+  defaulted instead of throwing, on a genuine shape mismatch (net8.0/net9.0).**
+  Two compounding causes: `System.Text.Json` matches property names
+  case-sensitively by default (so ordinary camelCase JSON — e.g. from
+  `EventMessage.FromJson`, or any non-.NET peer — failed to bind to a PascalCase C#
+  type), and it does not throw when a JSON object's constructor/property
+  parameters go unmatched, unless the target type uses `required` members (which
+  caller-supplied `T` is never guaranteed to). This directly violated the
+  documented `GetPayload<T>()` contract ("throws ... on a shape mismatch,"
+  analogous to `int.Parse`) — a payload with essentially nothing in common with
+  `T` returned a zeroed-out `T` rather than failing loudly. Fixed:
+  `PropertyNameCaseInsensitive` is now enabled for the case-mismatch scenario, and
+  a new shape check throws `JsonException` when a JSON object shares **no**
+  property name at all (case-insensitively) with any public property of `T` — see
+  `PROTOCOL.md`'s note on this check's coarse-match limitation. `Dictionary<TKey,
+  TValue>`-shaped targets are exempted (their own public properties never match
+  JSON payload keys). The net48/Newtonsoft.Json path already matched property
+  names case-insensitively and gains only the new shape check.
+- **`dotnet pack` on this multi-targeted (`net48;net8.0;net9.0`) project
+  intermittently skipped building one or more target frameworks before packing**,
+  producing `NU5026` ("...bin/Release/net48/HRpc.dll...not found on disk") — a
+  release-pipeline issue, not a runtime one, but one that could have shipped an
+  incomplete package. `publish.yml` now builds explicitly, then packs with
+  `--no-build`, rather than relying on `dotnet pack`'s implicit build.
 
 ### Fixed (found by CI on `stabilize/v1.2.0`, before first release)
 
