@@ -21,73 +21,13 @@ It provides a consistent client/server abstraction for line-delimited JSON messa
 
 ## Public API Surface
 
-### Core Types
-
-- `HRpc.Core.Connection` (unified TCP/Pipe client)
-- `HRpc.Core.Server` (unified TCP/Pipe server)
-- `HRpc.Core.TransportType` (enum: Tcp, Pipe)
-- `HRpc.Core.TcpClientWrapper`
-- `HRpc.Core.TcpServer`
-- `HRpc.Core.PipeServer`
-- `HRpc.Core.PipeClientWrapper`
-- `HRpc.Core.EventDispatcher`
-- `HRpc.Models.EventMessage`
-- `HRpc.Models.MessageEnvelope`
-
-### Interfaces
-
-- `HRpc.Interfaces.ITcpConnection`
-- `HRpc.Interfaces.ITcpClient`
-- `HRpc.Interfaces.IPipeConnection`
-- `HRpc.Interfaces.IPipeClient`
-- `HRpc.Interfaces.ITcpServer`
-- `HRpc.Interfaces.IEventMessage`
-
-### Event Args
-
-- `HRpc.Events.MessageReceivedEventArgs`
-- `HRpc.Events.ConnectionEventArgs`
-- `HRpc.Events.ErrorEventArgs`
+See [README.md](README.md) for the full public API — Quick Start, Advanced Usage, and
+constructor/accessor semantics with code samples.
 
 ## Message Protocol
 
-HRpc transmits one JSON envelope per line, UTF-8 encoded, newline (`\n`) delimited.
-Current wire protocol version is `2` (`MessageEnvelope.CurrentProtocolVersion`):
-
-```json
-{ "v": 2, "eventName": "EventName", "payload": { "any": "typed JSON value" } }
-```
-
-`payload` is a typed JSON value (object, array, string, number, etc.), not always a
-string — see the payload API below. Full framing, versioning, and error-handling rules
-are the authoritative content of [PROTOCOL.md](PROTOCOL.md); this section is a summary
-only.
-
-Not every parse failure kills the connection: a malformed-but-boundary-intact message
-(bad JSON, unknown event shape) is **recoverable** — `ErrorOccurred` fires and the
-connection stays open. Only framing-level failures (oversized line, unsupported protocol
-version, transport I/O error) are **fatal** and drop the connection. See PROTOCOL.md's
-error-handling table for the full FATAL/RECOVERABLE breakdown.
-
-### Payload API
-
-`IEventMessage`/`EventMessage` has no `string Payload` property. The payload is stored as
-a deferred-parse JSON value and read back via:
-
-- `GetPayload<T>()` — typed, throws `JsonException`/`FormatException` on a shape mismatch.
-- `TryGetPayload<T>(out T? value)` — non-throwing form.
-- `GetPayloadAsString()` — never throws; returns the string content if the payload is a
-  JSON string, otherwise the raw JSON text of whatever value is present.
-
-Construction has three distinct routes, not one:
-
-- `new EventMessage(name, string payload)` — embeds the string **literally** as a JSON
-  string value, never parsed or sniffed even if it looks like JSON.
-- `new EventMessage(name, object? payload)` — serializes the argument by its runtime type
-  and embeds it as a **nested** JSON value (POCO, anonymous object, primitive, or `null`).
-- `EventMessage.FromJson(name, jsonText)` — parses already-serialized JSON text and embeds
-  it as a nested value, for a caller holding pre-serialized JSON who wants the structured
-  shape rather than an escaped string.
+See [PROTOCOL.md](PROTOCOL.md) for wire format, versioning, and the full
+FATAL/RECOVERABLE error-handling table.
 
 ## Behavioral Guarantees
 
