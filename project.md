@@ -148,6 +148,18 @@ exchanges it for a short-lived NuGet API key via `NuGet/login@v1` (using the `NU
 repo secret to identify the nuget.org account), and uses that key for both pushes. No
 long-lived `NUGET_API_KEY` secret is stored or used by CI.
 
+**`NUGET_USER` must be the nuget.org profile username, not the GitHub username** — these
+are two different accounts and, for this repo, two different strings (nuget.org:
+`afzali.hamed`, GitHub: `hamedafzali`). `NuGet/login@v1` resolves the `user:` input via
+nuget.org's own account lookup and matches trust policies strictly by that account's ID —
+it is never matched against the GitHub org/repo owner. Setting `NUGET_USER` to the GitHub
+username produces a token-exchange HTTP 401 with the message "No matching trust policy
+owned by user `<value>`" — the exact same message nuget.org returns when the username
+doesn't exist at all, which is why this is easy to misdiagnose as a policy-configuration
+problem. This cost four separate failed publish attempts to isolate (each attempt tried a
+different wrong value, and each produced the identical error). If a token exchange 401s
+with that message, check the nuget.org username first, before touching the policy.
+
 It also supports a `workflow_dispatch` dry run (build/test/pack/version-guard only, no
 push, no secret required) — see `PUBLISH_CHECKLIST.md` for the exact commands.
 

@@ -19,6 +19,13 @@
 Normal path: push a `v<VERSION>` tag and let `.github/workflows/publish.yml` publish via
 NuGet Trusted Publishing (OIDC) — no API key involved.
 
+**`NUGET_USER` repo secret must be the nuget.org profile username (`afzali.hamed`), not
+the GitHub username (`hamedafzali`) — they differ.** Setting it to the GitHub username
+looks plausible but fails the token exchange with a 401 "No matching trust policy owned
+by user" error identical to what you'd see if the username didn't exist at all. See
+`project.md`'s Release Runbook for the full detail; this cost four failed publish
+attempts before the cause was found.
+
 Manual/local fallback only (Trusted Publishing's OIDC exchange only works inside the
 GitHub Actions run, not from a local machine — this needs a real API key from
 nuget.org's "API Keys" page, short-lived or otherwise):
