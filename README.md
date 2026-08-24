@@ -58,6 +58,7 @@ HRpc provides unified `Connection` and `Server` classes for both TCP and Named P
 ### TCP Client
 
 ```csharp
+using HRpc;
 using HRpc.Core;
 
 var connection = new Connection();
@@ -77,6 +78,7 @@ await connection.CloseAsync();
 ### Named Pipe Client
 
 ```csharp
+using HRpc;
 using HRpc.Core;
 
 var connection = new Connection();
@@ -98,6 +100,7 @@ await connection.CloseAsync();
 ### TCP Server
 
 ```csharp
+using HRpc;
 using HRpc.Core;
 
 var server = new Server();
@@ -114,6 +117,7 @@ await server.StartAsync("9000");
 ### Named Pipe Server
 
 ```csharp
+using HRpc;
 using HRpc.Core;
 
 var server = new Server();
@@ -134,6 +138,7 @@ await server.StartAsync("my-hrpc-pipe");
 Send a POCO or anonymous object directly -- it is serialized and embedded as a nested JSON value, not a re-escaped string:
 
 ```csharp
+using HRpc;
 using HRpc.Core;
 using HRpc.Models;
 
@@ -161,6 +166,7 @@ await connection.CloseAsync();
 Use `EventDispatcher` to subscribe to specific events and emit messages.
 
 ```csharp
+using HRpc;
 using HRpc.Core;
 using HRpc.Models;
 
@@ -191,6 +197,7 @@ await connection.CloseAsync();
 Handle connection errors and invalid messages.
 
 ```csharp
+using HRpc;
 using HRpc.Core;
 
 var connection = new Connection();
@@ -220,6 +227,7 @@ finally
 #### Server
 
 ```csharp
+using HRpc;
 using HRpc.Core;
 
 var server = new Server();
@@ -244,6 +252,7 @@ Console.WriteLine("Server started on port 9000");
 #### Client
 
 ```csharp
+using HRpc;
 using HRpc.Core;
 using HRpc.Models;
 

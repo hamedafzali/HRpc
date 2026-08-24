@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 
 #if NETFRAMEWORK
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 #else
 using System.Text.Json;
@@ -38,9 +42,14 @@ namespace HRpc.Utils
                 return (T)(object)(payloadValue.Value<string>() ?? string.Empty);
             }
 
+            T? result;
             try
             {
-                return payloadValue.ToObject<T>();
+                // Newtonsoft.Json's default contract resolver already matches JSON property
+                // names case-insensitively, so no explicit option is needed here for the
+                // camelCase-JSON-into-PascalCase-type case that the System.Text.Json path below
+                // needs PropertyNameCaseInsensitive for.
+                result = payloadValue.ToObject<T>();
             }
             catch (Exception ex) when (ex is FormatException or OverflowException or InvalidCastException)
             {
@@ -51,9 +60,66 @@ namespace HRpc.Utils
                 // always throws JsonException for the equivalent shape mismatch. Normalize so
                 // GetPayload<T> throws one exception type regardless of which serializer backs
                 // the current target framework.
-                throw new Newtonsoft.Json.JsonException(
+                throw new JsonException(
                     $"Could not convert payload to {typeof(T)}.", ex);
             }
+
+            EnsureShapeMatches<T>(payloadValue);
+            return result;
+        }
+
+        /// <summary>
+        /// Neither serializer throws when a JSON object shares no property names at all with
+        /// <typeparamref name="T"/> -- both silently bind every unmatched constructor
+        /// parameter/property to its type's default value instead (unless T happens to use the
+        /// `required` modifier, which a caller-supplied T is never guaranteed to). That breaks
+        /// GetPayload&lt;T&gt;'s documented "throws on shape mismatch" contract, analogous to
+        /// int.Parse: a payload that doesn't actually describe a T should fail loudly, not
+        /// return a T with every member zeroed. Detect that specific case -- a JSON object none
+        /// of whose property names case-insensitively match any public property of T -- and
+        /// throw. A partial match (some but not all properties present) is left alone: that's a
+        /// legitimate, if incomplete, T and not what this guards against.
+        /// </summary>
+        private static void EnsureShapeMatches<T>(JToken payloadValue)
+        {
+            if (payloadValue.Type != JTokenType.Object)
+            {
+                return;
+            }
+
+            if (typeof(System.Collections.IDictionary).IsAssignableFrom(typeof(T)) ||
+                typeof(T).GetInterfaces().Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IDictionary<,>)))
+            {
+                // A dictionary-shaped T binds every JSON object key as an entry rather than
+                // matching it against a public property, so the property-name heuristic below
+                // doesn't apply -- Dictionary<TKey, TValue>'s own public properties (Count, Keys,
+                // Values, Comparer) never match JSON payload keys even on a perfectly legitimate
+                // payload, so the check would false-positive on every dictionary target.
+                return;
+            }
+
+            var properties = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            if (properties.Length == 0)
+            {
+                return;
+            }
+
+            var jsonNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in (JObject)payloadValue)
+            {
+                jsonNames.Add(prop.Key);
+            }
+
+            foreach (var prop in properties)
+            {
+                if (jsonNames.Contains(prop.Name))
+                {
+                    return;
+                }
+            }
+
+            throw new JsonException(
+                $"Could not convert payload to {typeof(T)}: none of its public properties matched any property in the JSON payload.");
         }
 
         public static string GetPayloadAsString(JToken payloadValue)
@@ -83,6 +149,17 @@ namespace HRpc.Utils
             return JsonSerializer.SerializeToElement(payload, payload.GetType());
         }
 
+        // PropertyNameCaseInsensitive: System.Text.Json is case-sensitive by default, unlike
+        // Newtonsoft.Json's default contract resolver (used on net48 below). Without this, a
+        // wholly ordinary camelCase JSON payload -- e.g. from EventMessage.FromJson, which
+        // exists specifically for "pre-serialized JSON text from another system" -- fails to
+        // bind to a PascalCase C# type, and (see EnsureShapeMatches) would otherwise do so
+        // silently rather than throwing.
+        private static readonly JsonSerializerOptions DeserializeOptions = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+        };
+
         public static T? GetPayload<T>(JsonElement payloadValue)
         {
             if (typeof(T) == typeof(string) && payloadValue.ValueKind == JsonValueKind.String)
@@ -90,7 +167,55 @@ namespace HRpc.Utils
                 return (T)(object)(payloadValue.GetString() ?? string.Empty);
             }
 
-            return payloadValue.Deserialize<T>();
+            var result = payloadValue.Deserialize<T>(DeserializeOptions);
+            EnsureShapeMatches<T>(payloadValue);
+            return result;
+        }
+
+        /// <summary>
+        /// See the net48 overload of the same name for the full rationale: System.Text.Json
+        /// silently binds every unmatched constructor parameter/property to its type's default
+        /// value instead of throwing when a JSON object shares no property names at all with
+        /// <typeparamref name="T"/>. Detect and reject that specific case.
+        /// </summary>
+        private static void EnsureShapeMatches<T>(JsonElement payloadValue)
+        {
+            if (payloadValue.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            if (typeof(System.Collections.IDictionary).IsAssignableFrom(typeof(T)) ||
+                typeof(T).GetInterfaces().Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IDictionary<,>)))
+            {
+                // See the net48 overload of the same name: dictionary-shaped T binds every JSON
+                // object key as an entry rather than matching it against a public property, so
+                // the heuristic below would false-positive on every legitimate dictionary payload.
+                return;
+            }
+
+            var properties = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            if (properties.Length == 0)
+            {
+                return;
+            }
+
+            var jsonNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in payloadValue.EnumerateObject())
+            {
+                jsonNames.Add(prop.Name);
+            }
+
+            foreach (var prop in properties)
+            {
+                if (jsonNames.Contains(prop.Name))
+                {
+                    return;
+                }
+            }
+
+            throw new JsonException(
+                $"Could not convert payload to {typeof(T)}: none of its public properties matched any property in the JSON payload.");
         }
 
         public static string GetPayloadAsString(JsonElement payloadValue)

@@ -19,6 +19,7 @@ namespace HRpc.Core
         private readonly ConcurrentDictionary<TcpClient, Task> _clientTasks = new ConcurrentDictionary<TcpClient, Task>();
         private CancellationTokenSource? _serverCts;
         private volatile bool _running;
+        private Task? _acceptLoopTask;
 
         public event EventHandler<ConnectionEventArgs>? ClientConnected;
         public event EventHandler<ConnectionEventArgs>? ClientDisconnected;
@@ -51,7 +52,18 @@ namespace HRpc.Core
             });
         }
 
-        public async Task StartAsync(int port, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Binds and starts listening synchronously, then returns -- it does NOT wait for the
+        /// server to stop. The accept loop that used to run inline here (so the returned Task
+        /// only completed on shutdown, meaning `await StartAsync(...)` never returned while the
+        /// server was up) now runs as a detached background loop tracked by
+        /// <see cref="_acceptLoopTask"/>, which <see cref="StopAsync"/> awaits during teardown.
+        /// Synchronous setup failures (bad port, port in use) still throw directly from this
+        /// call, as before; failures during the background accept loop itself are reported via
+        /// <see cref="ErrorOccurred"/>, matching how <see cref="HandleClientAsync"/> already
+        /// reports its own background failures.
+        /// </summary>
+        public Task StartAsync(int port, CancellationToken cancellationToken = default)
         {
             if (_running)
             {
@@ -62,9 +74,14 @@ namespace HRpc.Core
             _listener.Start();
             _running = true;
             _serverCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var serverToken = _serverCts.Token;
-            var listener = _listener;
 
+            _acceptLoopTask = RunAcceptLoopAsync(_listener, _serverCts.Token);
+
+            return Task.CompletedTask;
+        }
+
+        private async Task RunAcceptLoopAsync(TcpListener listener, CancellationToken serverToken)
+        {
             // On net48, AcceptTcpClientAsync() has no CancellationToken-aware overload, so a
             // pending accept never observes serverToken becoming cancelled on its own. Stop()
             // disposes the listener socket, unblocking the pending accept as an
@@ -83,9 +100,9 @@ namespace HRpc.Core
                     TcpClient client;
 #if NETFRAMEWORK
                     serverToken.ThrowIfCancellationRequested();
-                    client = await _listener.AcceptTcpClientAsync();
+                    client = await listener.AcceptTcpClientAsync();
 #else
-                    client = await _listener.AcceptTcpClientAsync(serverToken);
+                    client = await listener.AcceptTcpClientAsync(serverToken);
 #endif
                     // Captured once, at accept time, rather than read again from client.Client
                     // in HandleClientAsync's finally: by teardown time the socket may already be
@@ -122,8 +139,10 @@ namespace HRpc.Core
             }
             catch (Exception ex)
             {
+                // Nobody awaits this loop's Task directly anymore (StartAsync already returned),
+                // so there is no caller left to propagate to -- report it the same way
+                // HandleClientAsync reports its own background failures.
                 OnErrorOccurred("Error in StartAsync", ex);
-                throw;
             }
             finally
             {
@@ -203,12 +222,18 @@ namespace HRpc.Core
             _serverCts?.Cancel();
             _listener?.Stop();
 
+            if (_acceptLoopTask != null)
+            {
+                await _acceptLoopTask.ConfigureAwait(false);
+            }
+
             var runningTasks = _clientTasks.Values;
             await Task.WhenAll(runningTasks);
 
             _clientTasks.Clear();
             _serverCts?.Dispose();
             _serverCts = null;
+            _acceptLoopTask = null;
         }
     }
 }

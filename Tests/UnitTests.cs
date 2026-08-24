@@ -779,15 +779,87 @@ namespace HRpc.Tests
         }
 
         [TestMethod]
+        [Timeout(5000)]
+        public async Task TcpServer_StartAsync_ShouldReturnAsSoonAsListening_NotWhenStopped()
+        {
+            // Regression test for the fresh-consumer-test finding: StartAsync used to run its
+            // accept loop inline, so the returned Task only completed once the server was
+            // stopped -- meaning `await server.StartAsync(...)`, exactly as every README server
+            // example calls it, deadlocked forever. StartAsync must return once the server is
+            // listening, not once it has stopped.
+            var port = GetFreePort();
+            var server = new TcpServer();
+
+            var startTask = server.StartAsync(port);
+            var completed = await Task.WhenAny(startTask, Task.Delay(TimeSpan.FromSeconds(2)));
+            Assert.AreEqual(startTask, completed, "StartAsync did not return promptly -- it appears to be blocking on its own accept loop again.");
+            Assert.IsTrue(startTask.IsCompleted && !startTask.IsFaulted && !startTask.IsCanceled);
+
+            // And it must actually be listening by the time StartAsync returned, not merely
+            // about to be -- connect immediately, with no extra delay.
+            using var client = new TcpClient();
+            await client.ConnectAsync("127.0.0.1", port);
+            Assert.IsTrue(client.Connected);
+
+            await server.StopAsync();
+        }
+
+        [TestMethod]
+        [Timeout(5000)]
         public async Task TcpServer_StartAsync_ShouldHonorCancellation()
         {
             var port = GetFreePort();
             var server = new TcpServer();
             using var cts = new CancellationTokenSource();
-            cts.CancelAfter(200);
 
             var startTask = server.StartAsync(port, cts.Token);
             await startTask;
+            Assert.IsTrue(startTask.IsCompleted && !startTask.IsFaulted && !startTask.IsCanceled);
+
+            // Cancelling the token must actually stop the server's background accept loop -- not
+            // just be ignored now that StartAsync itself returns immediately regardless of it.
+            cts.Cancel();
+            await Task.Delay(300);
+
+            using var client = new TcpClient();
+            await Assert.ThrowsExceptionAsync<SocketException>(
+                () => client.ConnectAsync("127.0.0.1", port));
+        }
+
+        [TestMethod]
+        [Timeout(5000)]
+        public async Task PipeServer_StartAsync_ShouldReturnAsSoonAsListening_NotWhenStopped()
+        {
+            var pipeName = "hrpcstartret-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            var server = new PipeServer();
+
+            var startTask = server.StartAsync(pipeName);
+            var completed = await Task.WhenAny(startTask, Task.Delay(TimeSpan.FromSeconds(2)));
+            Assert.AreEqual(startTask, completed, "StartAsync did not return promptly -- it appears to be blocking on its own accept loop again.");
+            Assert.IsTrue(startTask.IsCompleted && !startTask.IsFaulted && !startTask.IsCanceled);
+
+            using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            await client.ConnectAsync(2000);
+            Assert.IsTrue(client.IsConnected);
+
+            await server.StopAsync();
+        }
+
+        [TestMethod]
+        [Timeout(5000)]
+        public async Task Server_StartAsync_AsCalledInReadme_ShouldReturnPromptly()
+        {
+            // Exactly the README's "Quick Start (Server)" TCP example: `await
+            // server.StartAsync("9000");` immediately followed by more code. Before the fix,
+            // this line never returned.
+            var port = GetFreePort();
+            using var server = new Server { TransportType = TransportType.Tcp };
+
+            var startTask = server.StartAsync(port.ToString());
+            var completed = await Task.WhenAny(startTask, Task.Delay(TimeSpan.FromSeconds(2)));
+            Assert.AreEqual(startTask, completed, "await server.StartAsync(...) did not return -- the README's documented usage would deadlock.");
+
+            await server.StopAsync();
         }
 
         [TestMethod]
@@ -1736,6 +1808,54 @@ namespace HRpc.Tests
 
             Assert.IsFalse(ok);
             Assert.AreEqual(0, value);
+        }
+
+        private class OrderCreated
+        {
+            public int OrderId { get; set; }
+            public decimal Total { get; set; }
+        }
+
+        [TestMethod]
+        [Timeout(5000)]
+        public void EventMessage_GetPayload_CamelCaseJson_BindsToPascalCaseType_NotSilentDefault()
+        {
+            // Fresh-consumer-test finding: on net8.0/net9.0, System.Text.Json is case-sensitive
+            // by default, so ordinary camelCase JSON (e.g. from EventMessage.FromJson, or any
+            // peer written in a language with camelCase conventions) silently failed to bind to
+            // a PascalCase C# type -- returning an instance with every member defaulted to 0,
+            // not an exception and not the actual values.
+            var msg = EventMessage.FromJson("Foo", "{\"orderId\":7,\"total\":42.50}");
+
+            var payload = msg.GetPayload<OrderCreated>();
+
+            Assert.AreEqual(7, payload!.OrderId);
+            Assert.AreEqual(42.50m, payload.Total);
+        }
+
+        [TestMethod]
+        [Timeout(5000)]
+        public void EventMessage_GetPayload_UnrelatedShape_Throws_NotSilentDefault()
+        {
+            // Fresh-consumer-test finding: a JSON object with a completely unrelated shape to the
+            // requested T (no property names in common at all) used to silently deserialize to a
+            // T with every member defaulted, instead of throwing -- violating GetPayload<T>'s
+            // documented contract of throwing on a shape mismatch, mirroring int.Parse.
+            var msg = EventMessage.FromJson("Foo", "{\"foo\":\"not a number\"}");
+
+            Assert.ThrowsException<JsonExceptionType>(() => msg.GetPayload<OrderCreated>());
+        }
+
+        [TestMethod]
+        [Timeout(5000)]
+        public void EventMessage_TryGetPayload_UnrelatedShape_ReturnsFalse_NotSilentDefault()
+        {
+            var msg = EventMessage.FromJson("Foo", "{\"foo\":\"not a number\"}");
+
+            var ok = msg.TryGetPayload<OrderCreated>(out var value);
+
+            Assert.IsFalse(ok);
+            Assert.IsNull(value);
         }
 
         [TestMethod]

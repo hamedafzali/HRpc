@@ -19,6 +19,7 @@ namespace HRpc.Core
         private CancellationTokenSource? _serverCts;
         private volatile bool _running;
         private string _pipeName = string.Empty;
+        private Task? _acceptLoopTask;
 
         public event EventHandler<ConnectionEventArgs>? ClientConnected;
         public event EventHandler<ConnectionEventArgs>? ClientDisconnected;
@@ -60,7 +61,18 @@ namespace HRpc.Core
                 "PipeServer does not support port-based StartAsync. Use StartAsync(pipeName, cancellationToken)."));
         }
 
-        public async Task StartAsync(string pipeName, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Sets up server state synchronously, then returns -- it does NOT wait for the server
+        /// to stop. The accept loop that used to run inline here (so the returned Task only
+        /// completed on shutdown, meaning `await StartAsync(...)` never returned while the
+        /// server was up) now runs as a detached background loop tracked by
+        /// <see cref="_acceptLoopTask"/>, which <see cref="StopAsync"/> awaits during teardown.
+        /// Synchronous validation failures (bad pipe name, already running) still throw directly
+        /// from this call, as before; failures during the background accept loop itself are
+        /// reported via <see cref="ErrorOccurred"/>, matching how
+        /// <see cref="AcceptAndHandleClientAsync"/> already reports its own background failures.
+        /// </summary>
+        public Task StartAsync(string pipeName, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(pipeName))
             {
@@ -75,8 +87,14 @@ namespace HRpc.Core
             _pipeName = pipeName;
             _running = true;
             _serverCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var serverToken = _serverCts.Token;
 
+            _acceptLoopTask = RunAcceptLoopAsync(pipeName, _serverCts.Token);
+
+            return Task.CompletedTask;
+        }
+
+        private async Task RunAcceptLoopAsync(string pipeName, CancellationToken serverToken)
+        {
             try
             {
                 while (!serverToken.IsCancellationRequested)
@@ -105,8 +123,10 @@ namespace HRpc.Core
             }
             catch (Exception ex)
             {
+                // Nobody awaits this loop's Task directly anymore (StartAsync already returned),
+                // so there is no caller left to propagate to -- report it the same way
+                // AcceptAndHandleClientAsync reports its own background failures.
                 OnErrorOccurred("Error in StartAsync", ex);
-                throw;
             }
             finally
             {
@@ -226,12 +246,18 @@ namespace HRpc.Core
                 }
             }
 
+            if (_acceptLoopTask != null)
+            {
+                await _acceptLoopTask.ConfigureAwait(false);
+            }
+
             var runningTasks = _clientTasks.Values;
             await Task.WhenAll(runningTasks).ConfigureAwait(false);
 
             _clientTasks.Clear();
             cts?.Dispose();
             _serverCts = null;
+            _acceptLoopTask = null;
         }
 
         public void Dispose()

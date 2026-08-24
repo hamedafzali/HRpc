@@ -160,7 +160,14 @@ Access:
 - `GetPayload<T>()` — deserializes the payload as `T`. Throws (an exception matched by
   `Utils.ReceiveLoopErrors.IsRecoverableParseFailure` — i.e. `System.Text.Json.JsonException`/
   `Newtonsoft.Json.JsonException`/`FormatException`) if the payload's actual shape doesn't
-  deserialize as `T`. Analogous to `int.Parse`.
+  deserialize as `T`. Analogous to `int.Parse`. The shape check is deliberately coarse: it throws
+  only when a JSON object shares **no** property names at all (case-insensitively) with any public
+  property of `T`. A payload with one coincidentally-matching field name and an otherwise wrong
+  shape passes the check and can still silently bind with defaults on the rest — this is a real
+  limitation of the heuristic, not a bug, and is unrelated to the exemption for dictionary-shaped
+  `T` (`IDictionary`/`IDictionary<TKey, TValue>`), which skips the check entirely because a
+  dictionary's own public properties (`Count`, `Keys`, `Values`, `Comparer`) never match JSON
+  payload keys even on a legitimate payload.
 - `TryGetPayload<T>(out T? value)` — the non-throwing counterpart, analogous to `int.TryParse`.
   Returns `false` (and `value` is `default`) for the same class of failure `GetPayload<T>` would
   throw for.
