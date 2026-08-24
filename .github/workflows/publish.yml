@@ -17,13 +17,13 @@ name: Publish
 # published, so the csproj's <Version> is only a "last stable I built" convenience value
 # for local `dotnet pack` runs and never controls what a tag push actually publishes.
 #
-# Recommendation for any preview cut AFTER a stable release with the same X.Y.Z base
-# (e.g. a preview.2 for 1.2.0 after 1.2.0 already shipped): don't reuse the shipped base
-# version. The guard below is a simple version-string comparison (see the step below for
-# why), which does not reliably encode real SemVer prerelease precedence (where
-# "1.2.0-preview.1" sorts BEFORE "1.2.0"). Always bump to the next base version for a new
-# preview cycle (e.g. "1.3.0-preview.1"), which sidesteps the ambiguity entirely and is
-# the conventional approach anyway.
+# The version guard (below) does real SemVer precedence comparison (a prerelease always
+# sorts BEFORE the same X.Y.Z release -- "1.2.0-preview.3" < "1.2.0"), not a plain
+# string/`sort -V` comparison. An earlier version of this guard used `sort -V`, which does
+# NOT understand SemVer prerelease precedence and got this backwards -- it ranked
+# "1.2.0-preview.3" as newer than "1.2.0" and refused to publish the stable release that
+# followed it. Fixed 2026-08-24; kept here as a reminder not to "simplify" the guard back
+# to a plain sort.
 
 on:
   push:
@@ -87,7 +87,51 @@ jobs:
           echo "-> $VERSION ($CHANNEL channel)"
 
       - name: Guard against publishing <= the last published version
+        # Comparison is real SemVer precedence (a prerelease sorts BEFORE the same X.Y.Z
+        # release), done in Python rather than `sort -V` -- see the file-level comment at
+        # the top of this workflow for why a plain version-string sort is wrong here.
         run: |
+          cat > /tmp/version_guard.py <<'PYEOF'
+          import json, re, sys
+
+          def parse(v):
+              m = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$', v)
+              if not m:
+                  return None
+              major, minor, patch, pre = m.groups()
+              return (int(major), int(minor), int(patch)), pre
+
+          def precedence_key(v):
+              core, pre = parse(v)
+              if pre is None:
+                  # A release outranks every prerelease of the same X.Y.Z core.
+                  return (core, 1, [])
+              ident_keys = []
+              for ident in pre.split('.'):
+                  ident_keys.append((0, int(ident)) if ident.isdigit() else (1, ident))
+              return (core, 0, ident_keys)
+
+          candidate = sys.argv[1]
+          if parse(candidate) is None:
+              print(f"::error::Cannot parse candidate version '{candidate}' as SemVer.")
+              sys.exit(1)
+
+          published = [v for v in json.load(sys.stdin) if parse(v) is not None]
+
+          if not published:
+              print(f"OK: {candidate} is the first published version.")
+              sys.exit(0)
+
+          last = max(published, key=precedence_key)
+          print(f"Last published version (by SemVer precedence): {last}")
+
+          if precedence_key(candidate) <= precedence_key(last):
+              print(f"::error::Refusing to publish {candidate}: it is not strictly newer than the last published version ({last}) by SemVer precedence.")
+              sys.exit(1)
+
+          print(f"OK: {candidate} > {last}")
+          PYEOF
+
           VERSION="${{ steps.version.outputs.version }}"
           RESPONSE=$(curl -s -w "\n%{http_code}" https://api.nuget.org/v3-flatcontainer/hrpc/index.json)
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
@@ -95,26 +139,19 @@ jobs:
 
           if [ "$HTTP_CODE" = "404" ]; then
             echo "No prior published versions found (404) -- treating as first-ever publish."
-            LAST="0.0.0"
+            VERSIONS_JSON="[]"
           elif [ "$HTTP_CODE" != "200" ]; then
             echo "::error::Unexpected HTTP $HTTP_CODE from NuGet.org while checking published versions. Aborting rather than guessing."
             exit 1
           else
-            LAST=$(echo "$BODY" | jq -r '.versions[]' 2>/dev/null | sort -V | tail -n1)
-            if [ -z "$LAST" ]; then
+            VERSIONS_JSON=$(echo "$BODY" | jq -c '.versions // empty')
+            if [ -z "$VERSIONS_JSON" ]; then
               echo "::error::NuGet.org returned HTTP 200 but no parseable version list (unexpected response shape). Aborting rather than assuming this is safe to publish."
               exit 1
             fi
-            echo "Last published version: $LAST"
           fi
 
-          HIGHEST=$(printf '%s\n%s\n' "$LAST" "$VERSION" | sort -V | tail -n1)
-          if [ "$HIGHEST" != "$VERSION" ] || [ "$VERSION" = "$LAST" ]; then
-            echo "::error::Refusing to publish $VERSION: it is not strictly newer than the last published version ($LAST)."
-            exit 1
-          fi
-
-          echo "OK: $VERSION > $LAST"
+          echo "$VERSIONS_JSON" | python3 /tmp/version_guard.py "$VERSION"
 
       - name: Build
         # A bare `dotnet pack` on this multi-targeted (net48;net8.0;net9.0) project
