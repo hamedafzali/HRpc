@@ -161,7 +161,36 @@ await connection.SendAsync(new EventMessage("OrderCreated", new OrderCreated(1, 
 await connection.CloseAsync();
 ```
 
-### EventDispatcher for Request-Response Patterns
+### Request/response (`OnRequest` + `SendAndWaitAsync`)
+
+For a correlated call-and-reply pattern -- send a request, get exactly one matching reply back -- register a handler on the server with `OnRequest` and call `SendAndWaitAsync` on the client. HRpc generates and matches the correlation id (`cid`) for you; see [PROTOCOL.md](PROTOCOL.md#requestresponse-v130) for the full wire semantics.
+
+```csharp
+using HRpc;
+using HRpc.Core;
+
+// Server
+var server = new Server { TransportType = TransportType.Tcp };
+server.OnRequest("Add", async msg =>
+{
+    var numbers = msg.GetPayload<int[]>()!;
+    return numbers[0] + numbers[1];
+});
+await server.StartAsync("9000");
+
+// Client
+var client = new Connection { TransportType = TransportType.Tcp };
+await client.ConnectAsync("127.0.0.1:9000");
+
+var response = await client.SendAndWaitAsync(new EventMessage("Add", new[] { 2, 3 }), TimeSpan.FromSeconds(5));
+Console.WriteLine(response.GetPayload<int>()); // 5
+
+await client.CloseAsync();
+```
+
+If the handler throws, `SendAndWaitAsync` throws `RequestFailedException` (with `Code`/`Message` from the handler's exception) on the client. If no matching response arrives within the timeout, it throws `TimeoutException`. If the connection drops while a call is pending, it throws `InvalidOperationException`. `OnRequest` can be called before or after `StartAsync`. An `eventName` with no registered handler falls through to `MessageReceived` as usual -- this is purely additive to the existing pub/sub API.
+
+### EventDispatcher for pub/sub patterns
 
 Use `EventDispatcher` to subscribe to specific events and emit messages.
 

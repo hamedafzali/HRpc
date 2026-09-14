@@ -2105,6 +2105,135 @@ namespace HRpc.Tests
                 $"Expected the guard to abort before all {totalWrites} writes completed; {writesCompleted} completed.");
         }
 
+        [TestMethod]
+        [Timeout(5000)]
+        public async Task Server_OnRequest_ShouldAnswerMatchingRequest_ViaClientSendAndWaitAsync()
+        {
+            var port = GetFreePort();
+            using var server = new Server { TransportType = TransportType.Tcp };
+            server.OnRequest("Add", async msg =>
+            {
+                var numbers = msg.GetPayload<int[]>()!;
+                return await Task.FromResult(numbers[0] + numbers[1]);
+            });
+            await server.StartAsync(port.ToString());
+
+            using var client = new Connection { TransportType = TransportType.Tcp };
+            await client.ConnectAsync($"127.0.0.1:{port}");
+
+            var response = await client.SendAndWaitAsync(new EventMessage("Add", new[] { 2, 3 }), TimeSpan.FromSeconds(3));
+
+            Assert.AreEqual(5, response.GetPayload<int>());
+
+            await client.CloseAsync();
+            await server.StopAsync();
+        }
+
+        [TestMethod]
+        [Timeout(5000)]
+        public async Task Connection_SendAndWaitAsync_ShouldThrowTimeoutException_WhenNoHandlerRegistered()
+        {
+            var port = GetFreePort();
+            using var server = new Server { TransportType = TransportType.Tcp };
+            // No OnRequest registered -- the request-shaped message has nobody to answer it.
+            await server.StartAsync(port.ToString());
+
+            using var client = new Connection { TransportType = TransportType.Tcp };
+            await client.ConnectAsync($"127.0.0.1:{port}");
+
+            await Assert.ThrowsExceptionAsync<TimeoutException>(
+                () => client.SendAndWaitAsync(new EventMessage("NoSuchHandler", "x"), TimeSpan.FromMilliseconds(300)));
+
+            await client.CloseAsync();
+            await server.StopAsync();
+        }
+
+        [TestMethod]
+        [Timeout(5000)]
+        public async Task Connection_SendAndWaitAsync_ShouldThrowRequestFailedException_WhenHandlerThrows()
+        {
+            var port = GetFreePort();
+            using var server = new Server { TransportType = TransportType.Tcp };
+            server.OnRequest("Explode", _ => throw new InvalidOperationException("boom"));
+            await server.StartAsync(port.ToString());
+
+            using var client = new Connection { TransportType = TransportType.Tcp };
+            await client.ConnectAsync($"127.0.0.1:{port}");
+
+            var ex = await Assert.ThrowsExceptionAsync<RequestFailedException>(
+                () => client.SendAndWaitAsync(new EventMessage("Explode", "x"), TimeSpan.FromSeconds(3)));
+            Assert.AreEqual("boom", ex.Message);
+            Assert.AreEqual(nameof(InvalidOperationException), ex.Code);
+
+            await client.CloseAsync();
+            await server.StopAsync();
+        }
+
+        [TestMethod]
+        [Timeout(5000)]
+        public async Task Connection_SendAndWaitAsync_ShouldThrow_WhenConnectionClosedWhilePending()
+        {
+            var port = GetFreePort();
+            using var server = new Server { TransportType = TransportType.Tcp };
+            // Handler never completes, so the request is still pending when the client closes.
+            var handlerGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            server.OnRequest("Never", async _ =>
+            {
+                await handlerGate.Task;
+                return null;
+            });
+            await server.StartAsync(port.ToString());
+
+            using var client = new Connection { TransportType = TransportType.Tcp };
+            await client.ConnectAsync($"127.0.0.1:{port}");
+
+            var waitTask = client.SendAndWaitAsync(new EventMessage("Never", "x"), TimeSpan.FromSeconds(10));
+            await Task.Delay(200); // let the request actually reach the server
+            await client.CloseAsync();
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => waitTask);
+
+            handlerGate.TrySetResult(true);
+            await server.StopAsync();
+        }
+
+        [TestMethod]
+        [Timeout(5000)]
+        public async Task Server_OnRequest_UnmatchedRequestType_ShouldStillFireMessageReceived()
+        {
+            // A "request"-typed message for an eventName nobody registered OnRequest for must
+            // fall through to ordinary MessageReceived, not be silently swallowed.
+            var port = GetFreePort();
+            using var server = new Server { TransportType = TransportType.Tcp };
+            server.OnRequest("Handled", _ => Task.FromResult<object?>(null));
+
+            var received = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            server.MessageReceived += (_, e) =>
+            {
+                if (e.Message.EventName == "Unhandled")
+                {
+                    received.TrySetResult(true);
+                }
+            };
+            await server.StartAsync(port.ToString());
+
+            using var client = new Connection { TransportType = TransportType.Tcp };
+            await client.ConnectAsync($"127.0.0.1:{port}");
+
+            // Fire-and-forget SendAndWaitAsync with a short timeout -- nobody answers this cid,
+            // so it times out on the client side, but the server must still surface it via
+            // MessageReceived since no handler claimed "Unhandled".
+            var waitTask = client.SendAndWaitAsync(new EventMessage("Unhandled", "x"), TimeSpan.FromMilliseconds(300));
+
+            var completed = await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+            Assert.AreEqual(received.Task, completed, "MessageReceived never fired for the unmatched request-typed message.");
+
+            await Assert.ThrowsExceptionAsync<TimeoutException>(() => waitTask);
+
+            await client.CloseAsync();
+            await server.StopAsync();
+        }
+
         private static System.Collections.IDictionary GetClientTaskDictionary(object server)
         {
             var field = server.GetType().GetField("_clientTasks", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);

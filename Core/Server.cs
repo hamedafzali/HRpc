@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using HRpc.Core;
@@ -11,9 +12,15 @@ namespace HRpc.Core
 {
     public class Server : IDisposable
     {
-        private ITcpServer? _tcpServer;
+        private TcpServer? _tcpServer;
         private PipeServer? _pipeServer;
         private TransportType _transportType;
+
+        // Registered via OnRequest before a transport exists yet (the common case: subscribe,
+        // then StartAsync). Replayed onto the concrete transport once it's constructed, and also
+        // applied immediately below when a transport is already running.
+        private readonly Dictionary<string, Func<IEventMessage, Task<object?>>> _pendingRequestHandlers =
+            new Dictionary<string, Func<IEventMessage, Task<object?>>>();
 
         public TransportType TransportType
         {
@@ -39,6 +46,25 @@ namespace HRpc.Core
         /// </summary>
         public int MaxMessageSizeBytes { get; set; } = MessageSizeLimits.DefaultMaxMessageSizeBytes;
 
+        /// <summary>
+        /// Registers <paramref name="handler"/> to answer incoming requests (see
+        /// <see cref="TcpServer.OnRequest"/> for the full contract) named
+        /// <paramref name="eventName"/>. May be called before or after <see cref="StartAsync"/> —
+        /// a handler registered before the transport exists yet is applied to it as soon as it's
+        /// created.
+        /// </summary>
+        public void OnRequest(string eventName, Func<IEventMessage, Task<object?>> handler)
+        {
+            if (string.IsNullOrEmpty(eventName))
+            {
+                throw new ArgumentException("Event name cannot be null/empty.", nameof(eventName));
+            }
+
+            _pendingRequestHandlers[eventName] = handler ?? throw new ArgumentNullException(nameof(handler));
+            _tcpServer?.OnRequest(eventName, handler);
+            _pipeServer?.OnRequest(eventName, handler);
+        }
+
         public async Task StartAsync(string target, CancellationToken cancellationToken = default)
         {
             DisposeCurrentServer();
@@ -55,6 +81,10 @@ namespace HRpc.Core
                 _tcpServer.ClientDisconnected += OnClientDisconnected;
                 _tcpServer.MessageReceived += OnMessageReceived;
                 _tcpServer.ErrorOccurred += OnErrorOccurred;
+                foreach (var kvp in _pendingRequestHandlers)
+                {
+                    _tcpServer.OnRequest(kvp.Key, kvp.Value);
+                }
 
                 await _tcpServer.StartAsync(port, cancellationToken);
             }
@@ -65,6 +95,10 @@ namespace HRpc.Core
                 _pipeServer.ClientDisconnected += OnClientDisconnected;
                 _pipeServer.MessageReceived += OnMessageReceived;
                 _pipeServer.ErrorOccurred += OnErrorOccurred;
+                foreach (var kvp in _pendingRequestHandlers)
+                {
+                    _pipeServer.OnRequest(kvp.Key, kvp.Value);
+                }
 
                 await _pipeServer.StartAsync(target, cancellationToken);
             }

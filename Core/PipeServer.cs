@@ -21,6 +21,11 @@ namespace HRpc.Core
         private string _pipeName = string.Empty;
         private Task? _acceptLoopTask;
 
+        // Registered by OnRequest, consulted by HandleClientAsync when an incoming envelope is
+        // "type":"request". See TcpServer.OnRequest's doc comment -- this mirrors it.
+        private readonly ConcurrentDictionary<string, Func<IEventMessage, Task<object?>>> _requestHandlers =
+            new ConcurrentDictionary<string, Func<IEventMessage, Task<object?>>>();
+
         public event EventHandler<ConnectionEventArgs>? ClientConnected;
         public event EventHandler<ConnectionEventArgs>? ClientDisconnected;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
@@ -36,6 +41,20 @@ namespace HRpc.Core
         /// closed. Applies to connections accepted after this is set.
         /// </summary>
         public int MaxMessageSizeBytes { get; set; } = MessageSizeLimits.DefaultMaxMessageSizeBytes;
+
+        /// <summary>
+        /// Registers <paramref name="handler"/> to answer incoming "type":"request" envelopes.
+        /// See <see cref="TcpServer.OnRequest"/> for the full contract this mirrors.
+        /// </summary>
+        public void OnRequest(string eventName, Func<IEventMessage, Task<object?>> handler)
+        {
+            if (string.IsNullOrEmpty(eventName))
+            {
+                throw new ArgumentException("Event name cannot be null/empty.", nameof(eventName));
+            }
+
+            _requestHandlers[eventName] = handler ?? throw new ArgumentNullException(nameof(handler));
+        }
 
         /// <summary>
         /// Raises <see cref="ErrorOccurred"/>, guarding each subscriber individually (see
@@ -193,6 +212,13 @@ namespace HRpc.Core
                         continue;
                     }
 
+                    if (message.Type == MessageEnvelope.MessageTypeRequest && message.Cid != null
+                        && _requestHandlers.TryGetValue(message.EventName, out var handler))
+                    {
+                        await HandleRequestAsync(stream, message, handler, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+
                     SafeInvoke.EachHandler(MessageReceived, this,
                         new MessageReceivedEventArgs(new EventMessage(message.EventName, message.PayloadValue)),
                         ex => OnErrorOccurred("Unhandled exception in MessageReceived subscriber", ex));
@@ -225,6 +251,35 @@ namespace HRpc.Core
                     // ignore
                 }
             }
+        }
+
+        /// <summary>
+        /// See <see cref="TcpServer.HandleRequestAsync"/> for the full contract this mirrors.
+        /// </summary>
+        private async Task HandleRequestAsync(Stream stream, MessageEnvelope request, Func<IEventMessage, Task<object?>> handler, CancellationToken cancellationToken)
+        {
+            MessageEnvelope response;
+            try
+            {
+                var result = await handler(new EventMessage(request.EventName, request.PayloadValue)).ConfigureAwait(false);
+                response = new MessageEnvelope(request.EventName, result)
+                {
+                    Cid = request.Cid,
+                    Type = MessageEnvelope.MessageTypeResponse,
+                };
+            }
+            catch (Exception ex)
+            {
+                response = new MessageEnvelope(request.EventName, (object?)null)
+                {
+                    Cid = request.Cid,
+                    Type = MessageEnvelope.MessageTypeErrorResponse,
+                    Error = new MessageError { Code = ex.GetType().Name, Message = ex.Message },
+                };
+            }
+
+            var bytes = Encoding.UTF8.GetBytes(response.Serialize() + "\n");
+            await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task StopAsync()

@@ -4,6 +4,31 @@ All notable changes to HRpc are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Correlated request/response.** Activates the `cid`/`type`/`error` `MessageEnvelope`
+  fields that v1.2.0 reserved (unused) for exactly this purpose — see PROTOCOL.md's
+  "Request/response (v1.3.0)" section for the full wire semantics.
+  - Server: `TcpServer.OnRequest`/`PipeServer.OnRequest`/`Server.OnRequest(eventName,
+    handler)` registers an `async Func<IEventMessage, Task<object?>>` to answer
+    `"type":"request"` envelopes for one `eventName`. The handler's return value becomes
+    the `response` payload; a thrown exception is translated into an `errorResponse`
+    envelope (`code` = exception type name, `message` = exception message) instead of
+    propagating to `ErrorOccurred` or closing the connection. `Server.OnRequest` may be
+    called before or after `StartAsync`. An `eventName` with no registered handler falls
+    through to `MessageReceived` unchanged — purely additive to the existing pub/sub API.
+  - Client: `TcpConnection.SendAndWaitAsync`/`PipeConnection.SendAndWaitAsync`/
+    `Connection.SendAndWaitAsync(message, timeout, cancellationToken = default)` sends a
+    `request` envelope with a freshly generated `cid` and returns a `Task<IEventMessage>`
+    that completes on the matching `response`. Faults with the new
+    `RequestFailedException` on `errorResponse`, `TimeoutException` if no response arrives
+    within `timeout`, or `InvalidOperationException` if the connection drops while the
+    call is pending.
+  - No breaking changes: `IEventMessage`, `ITcpConnection`, `IPipeConnection`, and
+    `ITcpServer` are all unchanged. The new methods live only on the concrete
+    `TcpConnection`/`PipeConnection`/`TcpServer`/`PipeServer` classes and the `Connection`/
+    `Server` facades.
+
 ## [1.2.0] - 2026-08-24
 
 If you are upgrading from 1.1.x, read this entire entry before touching code. This

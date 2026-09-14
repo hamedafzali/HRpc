@@ -122,9 +122,9 @@ intentionally short — this schema is repeated on every single message.
 | `v`         | number                   | No       | Protocol version. Absent is treated as `1`. See [Version negotiation](#version-negotiation). |
 | `eventName` | string                   | Yes      | The event name / message topic, as supplied by the sender. |
 | `payload`   | any JSON value           | Yes      | The message payload, as supplied by the sender. **As of B3 (v1.2.0), this is typed JSON, not necessarily a string** — see [Payload representation](#payload-representation-b3) below. |
-| `cid`       | string                   | No       | **RESERVED for v1.3.0.** Correlation id. See below. |
-| `type`      | string                   | No       | **RESERVED for v1.3.0.** Message-type discriminator. See below. |
-| `error`     | object                   | No       | **RESERVED for v1.3.0.** Error payload (`code` + `message`). See below. |
+| `cid`       | string                   | No       | Correlation id. Set by `SendAndWaitAsync` on a request and echoed back by the matching `response`/`errorResponse`. See [Request/response](#requestresponse-v130) below. |
+| `type`      | string                   | No       | Message-type discriminator: `event` (default/absent), `request`, `response`, `errorResponse`. See [Request/response](#requestresponse-v130) below. |
+| `error`     | object                   | No       | Error payload (`code` + `message`), present on `errorResponse` only. See [Request/response](#requestresponse-v130) below. |
 
 Example — a plain fire-and-forget event with a typed object payload (v1.2.0+):
 
@@ -254,38 +254,87 @@ a throw is ordinary application-level error handling, not a threat to the connec
 - This is why `CurrentProtocolVersion` was bumped from `1` to `2` in B3 — see
   [Version negotiation](#version-negotiation).
 
-### Reserved fields: `cid`, `type`, `error` (v1.2.0 adds the shape, not the behavior)
+### Request/response (v1.3.0)
 
-v1.2.0 adds these three fields to `MessageEnvelope` purely so a future request/response layer
-(planned for v1.3.0) does not require another breaking wire-format change. **No HRpc code in
-v1.2.0 generates, matches on, dispatches on, or otherwise interprets any of these fields.** They
-exist on the type and on the wire; that is all.
+`cid`, `type`, and `error` were reserved (shape-only, unused) in v1.2.0 specifically for this
+layer. As of v1.3.0, HRpc implements a correlated request/response pattern on top of the plain
+event envelope, without changing framing, version negotiation, or the public `IEventMessage`
+payload surface at all.
 
-- **`cid`** (`MessageEnvelope.Cid`, `string?`) — a correlation id. Absent on ordinary
-  fire-and-forget events. HRpc never auto-generates one; a future request/response layer is
-  expected to set and match on it.
-- **`type`** (`MessageEnvelope.Type`, `string?`) — a message-type discriminator. Known values are
-  defined as documentation/convenience constants (`MessageEnvelope.MessageTypeEvent`,
-  `MessageTypeRequest`, `MessageTypeResponse`, `MessageTypeErrorResponse`) but are **not**
-  enforced: `Deserialize` does not validate this field against any allow-list. **An absent or
-  unrecognized `type` value is never fatal** — it deserializes into `Type` as-is (or stays `null`
-  if absent) and is not otherwise acted upon. What (if anything) a future version does with an
-  unrecognized value is a decision deferred entirely to whichever version implements
-  request/response.
-- **`error`** (`MessageEnvelope.Error`, `MessageError?`) — an error payload with `code` and
-  `message` string fields (`MessageError.Code` / `MessageError.Message`, JSON `"code"` /
-  `"message"`). Fields only; no propagation, throwing, or surfacing logic exists in v1.2.0.
+- **`cid`** (`MessageEnvelope.Cid`, `string?`) — a correlation id. `Connection.SendAndWaitAsync`
+  (and the underlying `TcpConnection`/`PipeConnection.SendAndWaitAsync`) generates one via
+  `Guid.NewGuid().ToString("N")` per call and stamps it on the outgoing `request` envelope. The
+  peer's `response`/`errorResponse` echoes the same `cid` back unchanged so the caller can match
+  it to the pending call. Absent on ordinary fire-and-forget events — `SendAsync` never sets it.
+- **`type`** (`MessageEnvelope.Type`, `string?`) — a message-type discriminator with four known
+  values, exposed as constants on `MessageEnvelope`: `MessageTypeEvent` ("event", the implicit
+  default — absent/`null` on ordinary messages), `MessageTypeRequest` ("request", set by
+  `SendAndWaitAsync`), `MessageTypeResponse` ("response", set by a handler's successful reply),
+  `MessageTypeErrorResponse` ("errorResponse", set when a handler throws). `Deserialize` still
+  does not validate this field against an allow-list — an absent or unrecognized `type` is never
+  fatal, and a receiver that doesn't recognize request/response semantics simply sees these as
+  ordinary events with extra ignored fields (see
+  [Unknown fields are ignored](#unknown-fields-are-ignored)).
+- **`error`** (`MessageEnvelope.Error`, `MessageError?`) — present only on `errorResponse`
+  envelopes. `code` is the throwing handler's exception type name (`ex.GetType().Name`), and
+  `message` is `ex.Message`. On the client, `SendAndWaitAsync` surfaces this as a thrown
+  `RequestFailedException` with matching `Code`/`Message` properties.
 
-All three are optional and **absent-by-default on the wire**: each is `null` unless explicitly
-set, and both serializers are configured to omit the key entirely when the value is `null`
-(`NullValueHandling.Ignore` for Newtonsoft, `[JsonIgnore(Condition = JsonIgnoreCondition.
-WhenWritingNull)]` for STJ). A plain `new MessageEnvelope(eventName, payload)` therefore still
-serializes to exactly `{"v":2,"eventName":"...","payload":...}` with no `cid`/`type`/`error`
-keys present — a 1.2.0 fire-and-forget message carries no more bytes for these fields than a
-1.1.x message did, `v` (added in B1) and the payload representation change (B3) aside. Neither
-`MessageEnvelope` constructor stamps or mutates `Cid`, `Type`, or `Error` — they stay `null`
-unless a caller sets them explicitly, consistent with the `Serialize()`-never-mutates invariant
-documented above.
+#### Server: registering a handler
+
+`TcpServer.OnRequest(eventName, handler)` / `PipeServer.OnRequest(eventName, handler)` (and the
+`Server` facade's `OnRequest`, which works whether called before or after `StartAsync`) register
+an `async Func<IEventMessage, Task<object?>>` for one `eventName`. When an incoming envelope has
+`type: "request"` and a `cid`, and its `eventName` has a registered handler, the handler is
+invoked and its return value becomes the `response` envelope's payload — written directly back on
+that same client's connection, never broadcast. A `request`-typed envelope for an `eventName`
+with **no** registered handler falls through to `MessageReceived` exactly like any other message;
+request/response is additive to the pub/sub surface, not a replacement for it. A handler that
+throws does not propagate to `ErrorOccurred` or close the connection — it is translated into an
+`errorResponse` envelope instead, consistent with the "one bad message shouldn't kill the
+connection" philosophy in [Error handling on receive](#error-handling-on-receive) above.
+
+#### Client: `SendAndWaitAsync`
+
+`Connection.SendAndWaitAsync(message, timeout, cancellationToken = default)` (and the
+`TcpConnection`/`PipeConnection` methods it delegates to) sends `message` as a `request` envelope
+with a freshly generated `cid`, and returns a `Task<IEventMessage>` that completes when a matching
+`response`/`errorResponse` envelope arrives on the same connection. Behavior:
+
+- **Success** (`response`): the task completes with an `IEventMessage` wrapping the handler's
+  return value, readable via the normal `GetPayload<T>()`/`GetPayloadAsString()` accessors.
+- **Handler threw** (`errorResponse`): the task faults with `RequestFailedException`, whose
+  `Message` is the handler exception's message and whose `Code` is its type name.
+- **Timeout**: if no matching response arrives within `timeout`, the task faults with
+  `TimeoutException`. Distinguished internally from a caller-supplied `cancellationToken`
+  cancellation (which instead propagates as `OperationCanceledException`/`TaskCanceledException`)
+  via a linked `CancellationTokenSource`.
+- **Connection drops while pending**: every still-pending `SendAndWaitAsync` call on that
+  connection faults with `InvalidOperationException("Connection closed while awaiting a
+  response.")`, so a dropped connection never leaves a caller awaiting forever.
+
+Response envelopes are intercepted in the normal receive loop before `MessageReceived` fires —
+matched by `cid` against a pending-calls table — so a `response`/`errorResponse` is never also
+delivered as an ordinary event.
+
+#### Wire example
+
+```json
+{"v":2,"eventName":"Add","type":"request","cid":"3f9a...","payload":[2,3]}
+{"v":2,"eventName":"Add","type":"response","cid":"3f9a...","payload":5}
+```
+
+```json
+{"v":2,"eventName":"Explode","type":"request","cid":"7b21...","payload":"x"}
+{"v":2,"eventName":"Explode","type":"errorResponse","cid":"7b21...","error":{"code":"InvalidOperationException","message":"boom"}}
+```
+
+All three fields remain optional and **absent-by-default on the wire** for ordinary events: each
+is `null` unless explicitly set, and both serializers omit the key entirely when the value is
+`null` (`NullValueHandling.Ignore` for Newtonsoft, `[JsonIgnore(Condition = JsonIgnoreCondition.
+WhenWritingNull)]` for STJ). A plain `new MessageEnvelope(eventName, payload)` still serializes to
+exactly `{"v":2,"eventName":"...","payload":...}` with no `cid`/`type`/`error` keys present —
+request/response adds no bytes to fire-and-forget traffic that doesn't use it.
 
 ### Unknown fields are ignored
 

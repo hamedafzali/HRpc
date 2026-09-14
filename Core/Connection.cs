@@ -12,8 +12,8 @@ namespace HRpc.Core
 {
     public class Connection : IDisposable
     {
-        private ITcpConnection? _tcpConnection;
-        private IPipeConnection? _pipeConnection;
+        private TcpConnection? _tcpConnection;
+        private PipeConnection? _pipeConnection;
         private TransportType _transportType;
 
         public TransportType TransportType
@@ -88,6 +88,28 @@ namespace HRpc.Core
             else if (_pipeConnection != null)
             {
                 await _pipeConnection.SendAsync(message);
+            }
+            else
+            {
+                throw new InvalidOperationException("Not connected");
+            }
+        }
+
+        /// <summary>
+        /// Sends <paramref name="message"/> as a request and asynchronously waits for the peer's
+        /// matching response, correlated by a freshly generated "cid". See
+        /// <see cref="TcpConnection.SendAndWaitAsync"/> for the full contract (timeout/error
+        /// behavior), which this delegates to.
+        /// </summary>
+        public Task<IEventMessage> SendAndWaitAsync(IEventMessage message, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            if (_tcpConnection != null)
+            {
+                return _tcpConnection.SendAndWaitAsync(message, timeout, cancellationToken);
+            }
+            else if (_pipeConnection != null)
+            {
+                return _pipeConnection.SendAndWaitAsync(message, timeout, cancellationToken);
             }
             else
             {

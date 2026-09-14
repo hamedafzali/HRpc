@@ -38,6 +38,24 @@ namespace HRpc.Models
         }
     }
 
+    /// <summary>
+    /// Thrown by <see cref="HRpc.Core.TcpConnection.SendAndWaitAsync"/> /
+    /// <see cref="HRpc.Core.PipeConnection.SendAndWaitAsync"/> when the peer replies to a
+    /// request with an "errorResponse" envelope instead of a "response" — i.e. the peer's
+    /// registered request handler threw, and that failure was translated into an error reply
+    /// rather than the request timing out or the connection dropping.
+    /// </summary>
+    public sealed class RequestFailedException : Exception
+    {
+        /// <summary>The peer-supplied error code, or null if none was given.</summary>
+        public string? Code { get; }
+
+        public RequestFailedException(string? code, string message) : base(message)
+        {
+            Code = code;
+        }
+    }
+
     public class MessageEnvelope
     {
         /// <summary>

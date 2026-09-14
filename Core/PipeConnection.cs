@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
@@ -24,6 +25,11 @@ namespace HRpc.Core
         private bool _isConnected;
         private bool _disconnectRaised;
         private string _pipeName = string.Empty;
+
+        // Requests awaiting a matching "response"/"errorResponse" envelope, keyed by the "cid"
+        // this connection generated for the outgoing request. See SendAndWaitAsync.
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<MessageEnvelope>> _pendingRequests =
+            new ConcurrentDictionary<string, TaskCompletionSource<MessageEnvelope>>();
 
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<ConnectionEventArgs>? Connected;
@@ -114,14 +120,17 @@ namespace HRpc.Core
             throw new NotSupportedException("PipeConnection does not support host/port ConnectAsync. Use ConnectAsync(pipeName, cancellationToken).");
         }
 
-        public async Task SendAsync(IEventMessage message)
+        public Task SendAsync(IEventMessage message)
+        {
+            return WriteEnvelopeAsync(new MessageEnvelope(message.EventName, message.PayloadValue));
+        }
+
+        private async Task WriteEnvelopeAsync(MessageEnvelope envelope)
         {
             if (!IsConnected || _stream == null)
             {
                 throw new InvalidOperationException("Not connected.");
             }
-
-            var envelope = new MessageEnvelope(message.EventName, message.PayloadValue);
 
             var bytes = Encoding.UTF8.GetBytes(envelope.Serialize() + "\n");
 
@@ -130,6 +139,65 @@ namespace HRpc.Core
 #else
             await _stream.WriteAsync(bytes);
 #endif
+        }
+
+        /// <summary>
+        /// Sends <paramref name="message"/> as a request (wire "type":"request", stamped with a
+        /// freshly generated "cid") and asynchronously waits for a matching "response" (or
+        /// "errorResponse") envelope from the peer, correlated by that cid. See
+        /// <see cref="TcpConnection.SendAndWaitAsync"/> for the full contract this mirrors.
+        /// </summary>
+        public async Task<IEventMessage> SendAndWaitAsync(IEventMessage message, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            var cid = Guid.NewGuid().ToString("N");
+            var tcs = new TaskCompletionSource<MessageEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingRequests[cid] = tcs;
+
+            try
+            {
+                var envelope = new MessageEnvelope(message.EventName, message.PayloadValue)
+                {
+                    Cid = cid,
+                    Type = MessageEnvelope.MessageTypeRequest,
+                };
+                await WriteEnvelopeAsync(envelope).ConfigureAwait(false);
+
+                using var timeoutCts = new CancellationTokenSource(timeout);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+                using var registration = linkedCts.Token.Register(() => tcs.TrySetCanceled(linkedCts.Token));
+
+                MessageEnvelope response;
+                try
+                {
+                    response = await tcs.Task.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException($"No response for request '{message.EventName}' (cid {cid}) within {timeout}.");
+                }
+
+                if (response.Type == MessageEnvelope.MessageTypeErrorResponse)
+                {
+                    throw new RequestFailedException(response.Error?.Code, response.Error?.Message ?? "Request failed.");
+                }
+
+                return new EventMessage(response.EventName, response.PayloadValue);
+            }
+            finally
+            {
+                _pendingRequests.TryRemove(cid, out _);
+            }
+        }
+
+        private void FailPendingRequests()
+        {
+            foreach (var cid in _pendingRequests.Keys)
+            {
+                if (_pendingRequests.TryRemove(cid, out var tcs))
+                {
+                    tcs.TrySetException(new InvalidOperationException("Connection closed while awaiting a response."));
+                }
+            }
         }
 
         private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
@@ -167,6 +235,13 @@ namespace HRpc.Core
                         continue;
                     }
 
+                    if ((msg.Type == MessageEnvelope.MessageTypeResponse || msg.Type == MessageEnvelope.MessageTypeErrorResponse)
+                        && msg.Cid != null && _pendingRequests.TryRemove(msg.Cid, out var pendingTcs))
+                    {
+                        pendingTcs.TrySetResult(msg);
+                        continue;
+                    }
+
                     SafeInvoke.EachHandler(MessageReceived, this,
                         new MessageReceivedEventArgs(new EventMessage(msg.EventName, msg.PayloadValue)),
                         ex => RaiseError("Unhandled exception in MessageReceived subscriber", ex));
@@ -182,6 +257,7 @@ namespace HRpc.Core
             }
             finally
             {
+                FailPendingRequests();
                 RaiseDisconnected();
             }
         }
