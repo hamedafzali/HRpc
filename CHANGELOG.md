@@ -4,6 +4,14 @@ All notable changes to HRpc are documented in this file.
 
 ## [Unreleased]
 
+### Documentation
+
+- Reorganized docs. `PROTOCOL.md` moved to `docs/PROTOCOL.md`. `project.md`,
+  `PUBLISH_CHECKLIST.md` and `RELEASE_NOTES_TEMPLATE.md` were merged into `docs/RELEASING.md`
+  and `README.md`; the v1.2.0 release notes they held are covered by the `[1.2.0]` entry below.
+- Added `docs/ROADMAP.md` with the plan for 1.4.0 through 2.0.
+- README links to the docs now use absolute GitHub URLs, so they also work on nuget.org.
+
 ## [1.3.1] - 2026-10-14
 
 ### Fixed
@@ -226,7 +234,7 @@ value on the wire instead of an escaped string.
   `MessageEnvelope(string, object?)` / `PayloadValue` / `GetPayload<T>()` /
   `TryGetPayload<T>()` / `GetPayloadAsString()`.
 
-See `PROTOCOL.md`'s [Payload representation](PROTOCOL.md#payload-representation-b3)
+See `PROTOCOL.md`'s [Payload representation](docs/PROTOCOL.md#payload-representation-b3)
 section for the full compatibility matrix.
 
 ### Breaking (interface): `IEventMessage.Payload` removed, no compatibility shim
@@ -285,7 +293,7 @@ var msg = EventMessage.FromJson("Order", json); // payload: {"id":1,"qty":2}
 Audit every `EventMessage` construction site during migration: `(string, string)` for
 genuinely textual payloads, `(string, object?)` for anything you want serialized for
 you, `FromJson(string, string)` for text you already know is JSON. See PROTOCOL.md's
-[`IEventMessage`/`EventMessage` typed payload](PROTOCOL.md#ieventmessageeventmessage-typed-payload-b3-ext--breaking-for-implementers)
+[`IEventMessage`/`EventMessage` typed payload](docs/PROTOCOL.md#ieventmessageeventmessage-typed-payload-b3-ext--breaking-for-implementers)
 section for the full reasoning.
 
 ### Behavior change: malformed messages no longer disconnect the connection
@@ -304,7 +312,7 @@ bounded, correctly-terminated line that simply failed to parse.
 If any consumer built reconnect/retry logic around "a single malformed message means
 the connection is dead," or a test asserts that behavior, it will no longer be
 triggered — the connection now survives on its own. See `PROTOCOL.md`'s
-[Error handling on receive](PROTOCOL.md#error-handling-on-receive) section for the
+[Error handling on receive](docs/PROTOCOL.md#error-handling-on-receive) section for the
 full per-error-class table.
 
 - **A throwing `MessageReceived` subscriber no longer disconnects the connection or

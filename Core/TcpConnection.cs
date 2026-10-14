@@ -72,7 +72,7 @@ namespace HRpc.Core
         /// throws here is itself swallowed rather than re-raised: there is no further event to
         /// escalate to without risking unbounded recursion if that subscriber throws on every
         /// call. The swallowed exception is written to <see cref="System.Diagnostics.Trace"/> (F-2)
-        /// so a buggy ErrorOccurred handler doesn't produce total silence — see PROTOCOL.md.
+        /// so a buggy ErrorOccurred handler doesn't produce total silence — see docs/PROTOCOL.md.
         /// </summary>
         private void RaiseError(string message, Exception? ex)
         {
@@ -169,7 +169,7 @@ namespace HRpc.Core
         /// freshly generated "cid") and asynchronously waits for a matching "response" (or
         /// "errorResponse") envelope from the peer, correlated by that cid. This is the
         /// request/response layer the "cid"/"type"/"error" fields on
-        /// <see cref="MessageEnvelope"/> were reserved for in v1.2.0 — see PROTOCOL.md.
+        /// <see cref="MessageEnvelope"/> were reserved for in v1.2.0 — see docs/PROTOCOL.md.
         ///
         /// Throws <see cref="TimeoutException"/> if no matching response arrives within
         /// <paramref name="timeout"/>, <see cref="RequestFailedException"/> if the peer replies

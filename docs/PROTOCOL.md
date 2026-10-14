@@ -13,9 +13,11 @@ onto one line.
 
 A connection carries a stream of these lines in one direction at a time per transport
 class — `TcpConnection`/`PipeConnection` receive from a `TcpServer`/`PipeServer`, and send
-via `SendAsync`. There is currently no server-to-client push channel beyond
+via `SendAsync`. The server writes back to a client in only two cases:
 `PipeServer.InitialMessage` (a single envelope sent once, immediately after a client
-connects, before that client's own messages are read).
+connects, before that client's own messages are read) and the `response`/`errorResponse`
+to a request (see [Request/response](#requestresponse-v130)). There is no unsolicited
+server-to-client push yet; it is planned for 1.4.0 (see [ROADMAP.md](ROADMAP.md)).
 
 ### Maximum message size
 

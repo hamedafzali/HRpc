@@ -65,7 +65,7 @@ namespace HRpc.Core
         /// throws here is itself swallowed rather than re-raised: there is no further event to
         /// escalate to without risking unbounded recursion if that subscriber throws on every
         /// call. The swallowed exception is written to <see cref="System.Diagnostics.Trace"/> (F-2)
-        /// so a buggy ErrorOccurred handler doesn't produce total silence — see PROTOCOL.md.
+        /// so a buggy ErrorOccurred handler doesn't produce total silence — see docs/PROTOCOL.md.
         /// </summary>
         private void RaiseError(string message, Exception? ex)
         {

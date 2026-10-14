@@ -163,7 +163,7 @@ await connection.CloseAsync();
 
 ### Request/response (`OnRequest` + `SendAndWaitAsync`)
 
-For a correlated call-and-reply pattern -- send a request, get exactly one matching reply back -- register a handler on the server with `OnRequest` and call `SendAndWaitAsync` on the client. HRpc generates and matches the correlation id (`cid`) for you; see [PROTOCOL.md](PROTOCOL.md#requestresponse-v130) for the full wire semantics.
+For a correlated call-and-reply pattern -- send a request, get exactly one matching reply back -- register a handler on the server with `OnRequest` and call `SendAndWaitAsync` on the client. HRpc generates and matches the correlation id (`cid`) for you; see [PROTOCOL.md](https://github.com/hamedafzali/HRpc/blob/main/docs/PROTOCOL.md#requestresponse-v130) for the full wire semantics.
 
 ```csharp
 using HRpc;
@@ -262,16 +262,11 @@ using HRpc.Core;
 var server = new Server();
 server.TransportType = TransportType.Tcp;
 
-server.MessageReceived += async (sender, e) =>
+server.MessageReceived += (sender, e) =>
 {
+    // One-way events land here. To reply to a client, register an OnRequest handler
+    // and have the client call SendAndWaitAsync (see "Request/response" above).
     Console.WriteLine($"Server received: {e.Message.EventName} - {e.Message.GetPayloadAsString()}");
-
-    // Echo back
-    if (sender is Server srv)
-    {
-        // Note: Server doesn't have SendAsync; messages are handled via events
-        // For response, you might need to use a separate connection or custom logic
-    }
 };
 
 await server.StartAsync("9000");
@@ -298,18 +293,26 @@ Console.WriteLine("Client connected");
 
 await client.SendAsync(new EventMessage("Test", "Hello from client!"));
 
-await Task.Delay(1000); // Wait for response
-
 await client.CloseAsync();
 ```
 
-## Error Handling
+## Behavior Notes
 
 - `ConnectAsync(...)` throws on failure and also raises `ErrorOccurred`.
-- Invalid message payloads raise `ErrorOccurred`.
+- A malformed message raises `ErrorOccurred` and is skipped; the connection stays up.
+- A message larger than `MaxMessageSizeBytes` (default 1 MiB) is fatal: `ErrorOccurred` fires with `LineTooLongException` and the connection is dropped.
+- A throwing `MessageReceived` subscriber doesn't disconnect the connection or block other subscribers.
+- `IsConnected` reflects tracked connection state, not a raw socket check.
 - `EventDispatcher.Subscribe(...)` returns `IDisposable`; dispose it to unsubscribe.
+- There is no built-in authentication or encryption. For internet-facing use, run behind TLS and an authentication boundary.
 
-## Links
+## Documentation
 
-- Source: [https://github.com/hamedafzali/HRpc](https://github.com/hamedafzali/HRpc)
-- License: MIT
+| Document | Contents |
+|----------|----------|
+| [Protocol](https://github.com/hamedafzali/HRpc/blob/main/docs/PROTOCOL.md) | Wire format, versioning, request/response semantics, error-handling rules |
+| [Changelog](https://github.com/hamedafzali/HRpc/blob/main/CHANGELOG.md) | Every release, with migration notes |
+| [Roadmap](https://github.com/hamedafzali/HRpc/blob/main/docs/ROADMAP.md) | Planned work: server push, new transports, AI/MCP integration |
+| [Releasing](https://github.com/hamedafzali/HRpc/blob/main/docs/RELEASING.md) | How versions are published to NuGet (maintainers) |
+
+Source: [github.com/hamedafzali/HRpc](https://github.com/hamedafzali/HRpc) · License: MIT

@@ -63,7 +63,7 @@ namespace HRpc.Models
         /// stamped by the <see cref="MessageEnvelope(string, object)"/> constructor, not by
         /// <see cref="Serialize"/> (which does not mutate or override <see cref="Version"/>; see
         /// its doc comment). Bump this constant — and only this constant — when the envelope
-        /// schema changes in a way that isn't purely additive. See PROTOCOL.md for the full
+        /// schema changes in a way that isn't purely additive. See docs/PROTOCOL.md for the full
         /// version-negotiation contract.
         ///
         /// Bumped to 2 in v1.2.0 (B3): the "payload" field's JSON shape changed from an
@@ -182,7 +182,7 @@ namespace HRpc.Models
         /// JSON string value, byte-identical to pre-B3 behavior for a plain string payload.
         /// Prefer <see cref="PayloadValue"/> with <see cref="GetPayload{T}"/> for typed access.
         /// </summary>
-        [Obsolete("Use PayloadValue with GetPayload<T>()/TryGetPayload<T>() (or GetPayloadAsString() for the old raw-string behavior) instead. See PROTOCOL.md.")]
+        [Obsolete("Use PayloadValue with GetPayload<T>()/TryGetPayload<T>() (or GetPayloadAsString() for the old raw-string behavior) instead. See docs/PROTOCOL.md.")]
 #if NETFRAMEWORK
         [JsonIgnore]
 #else
@@ -285,7 +285,7 @@ namespace HRpc.Models
         /// <see cref="MessageEnvelope(string, object)"/> called with a string payload — the
         /// string becomes the JSON string value of "payload", byte-identical to pre-B3 output.
         /// </summary>
-        [Obsolete("Use MessageEnvelope(string eventName, object? payload) so the payload is written as typed JSON instead of a re-escaped string when it isn't already one. See PROTOCOL.md.")]
+        [Obsolete("Use MessageEnvelope(string eventName, object? payload) so the payload is written as typed JSON instead of a re-escaped string when it isn't already one. See docs/PROTOCOL.md.")]
         public MessageEnvelope(string eventName, string payload)
             : this(eventName, (object?)payload)
         {

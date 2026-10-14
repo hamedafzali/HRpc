@@ -15,9 +15,9 @@ namespace HRpc.Models
     /// <c>SendAsync</c>, and constructed by HRpc's receive loops to hand to
     /// <c>MessageReceived</c> subscribers. Stores its payload the same way
     /// <see cref="MessageEnvelope"/> does: a deferred-parse JSON value, not a flat string (see
-    /// <see cref="IEventMessage"/> and PROTOCOL.md's "Payload representation" section).
+    /// <see cref="IEventMessage"/> and docs/PROTOCOL.md's "Payload representation" section).
     ///
-    /// TWO CONSTRUCTORS, TWO DISTINCT MEANINGS — see PROTOCOL.md for the full reasoning:
+    /// TWO CONSTRUCTORS, TWO DISTINCT MEANINGS — see docs/PROTOCOL.md for the full reasoning:
     /// <list type="bullet">
     /// <item><see cref="EventMessage(string, string)"/> — the argument IS the payload; it is
     /// embedded as a JSON string value on the wire. Correct for a genuinely textual payload

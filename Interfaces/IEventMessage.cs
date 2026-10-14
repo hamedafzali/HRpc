@@ -13,7 +13,7 @@ namespace HRpc.Interfaces
     /// (v1.2.0), the payload is a deferred-parse typed JSON value (<c>JsonElement</c> on
     /// net8.0/net9.0, <c>JToken</c> on net48), not a flat <c>string</c>. This is a breaking
     /// change for any external <see cref="IEventMessage"/> implementer: the previous
-    /// <c>string Payload</c> member no longer exists on this interface. See PROTOCOL.md and
+    /// <c>string Payload</c> member no longer exists on this interface. See docs/PROTOCOL.md and
     /// CHANGELOG.md for migration guidance.
     /// </summary>
     public interface IEventMessage
