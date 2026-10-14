@@ -2018,7 +2018,10 @@ namespace HRpc.Tests
             connection.ErrorOccurred += (_, e) => errorTcs.TrySetResult(e.Ex);
 
             var writesCompleted = 0;
-            var totalWrites = 2000; // 2000 * 1024 bytes ~= 2MB, far beyond the 4096-byte limit, and never contains '\n'.
+            // 64 MB, never containing '\n'. Must exceed what kernel socket buffers can absorb
+            // (Linux loopback auto-tunes to several MB), or the writer can finish before the
+            // reader's abort is ever observable on the writing side.
+            var totalWrites = 64 * 1024;
             using var writerCts = new CancellationTokenSource();
 
             var acceptTask = Task.Run(async () =>
@@ -2048,12 +2051,12 @@ namespace HRpc.Tests
             Assert.AreEqual(errorTcs.Task, completed, "Expected ErrorOccurred to fire for an unbounded, newline-less stream.");
             Assert.IsInstanceOfType(errorTcs.Task.Result, typeof(LineTooLongException));
 
-            writerCts.Cancel();
             await connection.CloseAsync();
-            await Task.WhenAny(acceptTask, Task.Delay(TimeSpan.FromSeconds(2)));
+            var writerStopped = await Task.WhenAny(acceptTask, Task.Delay(TimeSpan.FromSeconds(5))) == acceptTask;
+            writerCts.Cancel();
 
-            Assert.IsTrue(writesCompleted < totalWrites,
-                $"Expected the guard to abort before all {totalWrites} writes completed; {writesCompleted} completed.");
+            Assert.IsTrue(writerStopped && writesCompleted < totalWrites,
+                $"Expected the closed connection to cut the writer off before all {totalWrites} writes; {writesCompleted} completed.");
         }
 
         [TestMethod]
@@ -2069,7 +2072,7 @@ namespace HRpc.Tests
             connection.ErrorOccurred += (_, e) => errorTcs.TrySetResult(e.Ex);
 
             var writesCompleted = 0;
-            var totalWrites = 2000;
+            var totalWrites = 64 * 1024; // 64 MB -- see the TCP variant above for why this must dwarf kernel buffers.
             using var writerCts = new CancellationTokenSource();
 
             var acceptTask = Task.Run(async () =>
@@ -2098,12 +2101,12 @@ namespace HRpc.Tests
             Assert.AreEqual(errorTcs.Task, completed, "Expected ErrorOccurred to fire for an unbounded, newline-less stream.");
             Assert.IsInstanceOfType(errorTcs.Task.Result, typeof(LineTooLongException));
 
-            writerCts.Cancel();
             await connection.CloseAsync();
-            await Task.WhenAny(acceptTask, Task.Delay(TimeSpan.FromSeconds(2)));
+            var writerStopped = await Task.WhenAny(acceptTask, Task.Delay(TimeSpan.FromSeconds(5))) == acceptTask;
+            writerCts.Cancel();
 
-            Assert.IsTrue(writesCompleted < totalWrites,
-                $"Expected the guard to abort before all {totalWrites} writes completed; {writesCompleted} completed.");
+            Assert.IsTrue(writerStopped && writesCompleted < totalWrites,
+                $"Expected the closed connection to cut the writer off before all {totalWrites} writes; {writesCompleted} completed.");
         }
 
         [TestMethod]
