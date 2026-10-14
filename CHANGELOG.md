@@ -4,6 +4,24 @@ All notable changes to HRpc are documented in this file.
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-10-14
+
+### Added
+
+- `net10.0` target framework. .NET 8 and .NET 9 reach end of support on 2026-11-10, and
+  .NET 10 is the current LTS. The `net8.0` and `net9.0` builds stay in the package.
+
+### Changed
+
+- CI tests `net8.0`, `net9.0` and `net10.0` on both Linux and macOS. On Unix, .NET named
+  pipes are Unix domain sockets, and macOS has the shortest socket-path limit. The
+  informational-only net10 job is gone. CI and publishing now use the .NET 10 SDK.
+- Removed the `Microsoft.SourceLink.GitHub` 8.0.0 build-time package. SourceLink is built
+  into the .NET 8+ SDK, and that package pulled in `Microsoft.Build.Tasks.Git` 8.0.0, which
+  has a known vulnerability (GHSA-23fw-v26w-5fgq) and failed the warnings-as-errors build
+  under the .NET 10 SDK. It was build-time only (`PrivateAssets="All"`), so consumers are
+  unaffected. The symbol package still carries SourceLink metadata.
+
 ### Documentation
 
 - Reorganized docs. `PROTOCOL.md` moved to `docs/PROTOCOL.md`. `project.md`,

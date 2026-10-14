@@ -7,7 +7,7 @@ How a new version gets from `main` to nuget.org. All commands run from the repos
 Publishing is automated by [`.github/workflows/publish.yml`](../.github/workflows/publish.yml),
 triggered by pushing a `v*` tag (e.g. `v1.4.0`, `v1.4.0-preview.1`). The workflow:
 
-1. Re-runs the full CI test matrix (net48 on Windows, net8.0/net9.0 on Linux).
+1. Re-runs the full CI test matrix (net48 on Windows; net8.0, net9.0 and net10.0 on Linux and macOS).
 2. Derives the package version **from the tag**. `<Version>` in `HRpc.csproj` is overridden
    via `/p:Version=` at pack time and is only a local-build convenience, but keep it in sync.
 3. Runs a version guard: the tag must be strictly greater (SemVer precedence) than the

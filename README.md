@@ -16,6 +16,7 @@ dotnet add package HRpc
 - `net48`
 - `net8.0`
 - `net9.0`
+- `net10.0`
 
 ## Message Format
 

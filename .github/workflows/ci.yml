@@ -14,8 +14,8 @@ env:
 jobs:
   # net48 is .NET Framework, which only runs on Windows -- this leg cannot run on
   # ubuntu-latest/macos-latest no matter how the workflow is written. It is also the ONLY
-  # leg that requires Windows: net8.0/net9.0 run fine (build and test) on any OS, so they
-  # run on ubuntu-latest below to keep the matrix fast and cheap.
+  # leg that requires Windows: net8.0+ runs fine (build and test) on any OS, so those legs
+  # run on Linux and macOS below.
   test-net48-windows:
     name: Build & Test (net48, windows-latest)
     runs-on: windows-latest
@@ -24,7 +24,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: "9.0.x"
+          dotnet-version: "10.0.x" # the solution targets net10.0, so restore needs the 10 SDK
 
       - name: Restore
         run: dotnet restore HRpc.sln
@@ -35,13 +35,16 @@ jobs:
       - name: Test (net48 -- Newtonsoft.Json serializer path)
         run: dotnet test Tests/HRpc.Tests.csproj -f net48 -c Release --no-build --logger "console;verbosity=normal"
 
-  test-linux:
-    name: Build & Test (${{ matrix.tfm }}, ubuntu-latest)
-    runs-on: ubuntu-latest
+  # Linux and macOS: on Unix, .NET named pipes are Unix domain sockets under /tmp, and
+  # macOS has the shortest socket-path limit, so both OSes are tested, not just Linux.
+  test-unix:
+    name: Build & Test (${{ matrix.tfm }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        tfm: [net8.0, net9.0]
+        os: [ubuntu-latest, macos-latest]
+        tfm: [net8.0, net9.0, net10.0]
     steps:
       - uses: actions/checkout@v5
 
@@ -50,6 +53,7 @@ jobs:
           dotnet-version: |
             8.0.x
             9.0.x
+            10.0.x
 
       - name: Restore
         run: dotnet restore HRpc.sln
@@ -59,25 +63,3 @@ jobs:
 
       - name: Test (${{ matrix.tfm }} -- System.Text.Json serializer path)
         run: dotnet test Tests/HRpc.Tests.csproj -f ${{ matrix.tfm }} -c Release --no-build --logger "console;verbosity=normal"
-
-  # Informational only -- does not gate the build. The local dev sandbox this repo was
-  # retargeted in only had the 9.0.304 SDK installed (NETSDK1045 for net10.0), which was
-  # confirmed to be an SDK-availability limit, not a code issue. GitHub-hosted runner images
-  # move faster than that sandbox; this job finds out whether net10.0 already builds cleanly
-  # here without committing to it as a supported TFM yet.
-  net10-preview-check:
-    name: net10.0 build check (informational, non-blocking)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: "10.0.x"
-
-      - name: Restore
-        run: dotnet restore HRpc.csproj
-
-      - name: Build HRpc.csproj against net10.0
-        run: dotnet build HRpc.csproj -c Release /p:TargetFrameworks=net48%3Bnet8.0%3Bnet9.0%3Bnet10.0 -f net10.0

@@ -21,7 +21,8 @@ them at their own game. It should be the best choice in its own niche.
 app, a Python script, an Electron/Tauri UI, an AI agent) with plain newline-delimited JSON
 over TCP, pipes, stdio or WebSockets. The plan below reinforces that niche:
 
-1. **Run everywhere .NET runs.** Current target frameworks, all three desktop OSes, AOT.
+1. **Run everywhere .NET runs.** Current target frameworks (`net10.0` since 1.3.2), all three
+   desktop OSes, AOT.
 2. **Speak to everything.** A language-neutral protocol spec plus small reference clients.
 3. **Fill the gaps users hit first:** server push, cancellation, security defaults.
 
@@ -32,21 +33,7 @@ over TCP, pipes, stdio or WebSockets. The plan below reinforces that niche:
 | 1.2.0 | Typed JSON payloads (protocol v2), named-pipe transport, recoverable parse errors, max message size, `net48`/`net8.0`/`net9.0`. |
 | 1.3.0 | Correlated request/response: `OnRequest` on servers, `SendAndWaitAsync` on connections. |
 | 1.3.1 | Writes serialized per connection (fixes frame corruption under concurrent sends). `Logger` marked `[Obsolete]`. CI on Node 24 actions. |
-
-## 1.3.2 / 1.4.0: urgent platform work (do first)
-
-- **Add a `net10.0` target.** .NET 8 and .NET 9 both reach
-  [end of support on 2026-11-10](https://devblogs.microsoft.com/dotnet/dotnet-8-9-end-of-support/).
-  .NET 10 is the current LTS, supported until November 2028.
-  - Keep `net8.0`: it costs nothing and covers users who can't upgrade yet.
-  - `net9.0` can be dropped later. .NET 9 apps fall back to the `net8.0` build.
-  - CI already builds net10 as an informational job. Promote it to a required test job.
-- **Add macOS to CI.** Today CI covers Windows (`net48`) and Linux. macOS has the shortest
-  Unix-socket path limit, which affects pipe names (see
-  [Cross-platform notes](#cross-platform-notes)).
-- **Opt-in `CurrentUserOnly` for pipes.** HRpc pipes currently accept any local user. Add a
-  server/client option that passes `PipeOptions.CurrentUserOnly`. It's additive, so the
-  default stays unchanged until 2.0.
+| 1.3.2 | `net10.0` target, ahead of .NET 8/9 end of support on 2026-11-10. CI on Linux **and macOS** for every modern target. |
 
 ## 1.4.0: core cleanup, server push, cancellation
 
@@ -66,6 +53,11 @@ over TCP, pipes, stdio or WebSockets. The plan below reinforces that niche:
    other message on that connection. Add a concurrency limit option.
 5. **Optional heartbeat / dead-peer detection.** A configurable ping interval and timeout, so
    a silently dropped peer is noticed without waiting for a write to fail.
+6. **Opt-in `CurrentUserOnly` for pipes.** HRpc pipes currently accept any local user. Add a
+   server/client option that passes `PipeOptions.CurrentUserOnly`. The default stays
+   unchanged until 2.0.
+7. **Drop `net9.0` from the package** (optional). .NET 9 apps fall back to the `net8.0`
+   build, so this only trims the package.
 
 ## 1.5.0: transports and AOT
 
@@ -123,9 +115,9 @@ How HRpc behaves on each platform today, and what the plan changes.
 
 | Platform | TCP | Named pipes | Notes / plan |
 |----------|-----|-------------|--------------|
-| **Windows** (`net48`, `net8+`) | ✅ | ✅ Native Windows pipes | Fully tested in CI. |
+| **Windows** (`net48`, `net8+`) | ✅ | ✅ Native Windows pipes | `net48` tested in CI. `net8+` builds are tested on Linux/macOS. |
 | **Linux** (`net8+`) | ✅ | ✅ Emulated (see below) | Tested in CI. |
-| **macOS** (`net8+`) | ✅ | ✅ Emulated, short-path caveat | **Not in CI yet**. Added in 1.3.2/1.4. |
+| **macOS** (`net8+`) | ✅ | ✅ Emulated, short-path caveat | Tested in CI since 1.3.2. |
 | **Browser / Blazor WASM** | ❌ No raw sockets | ❌ | Needs the WebSocket transport (1.5). |
 | **Android / iOS (MAUI)** | ✅ Probably | Not useful | Untested. TCP to a desktop or server is the realistic use. |
 | **Unity** | Untested | Untested | IL2CPP builds have reported `NamedPipeServerStream` failures. Revisit with the 2.0 `netstandard2.0` question. |
