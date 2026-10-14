@@ -312,7 +312,7 @@ await client.CloseAsync();
 |----------|----------|
 | [Protocol](https://github.com/hamedafzali/HRpc/blob/main/docs/PROTOCOL.md) | Wire format, versioning, request/response semantics, error-handling rules |
 | [Changelog](https://github.com/hamedafzali/HRpc/blob/main/CHANGELOG.md) | Every release, with migration notes |
-| [Roadmap](https://github.com/hamedafzali/HRpc/blob/main/docs/ROADMAP.md) | Planned work: server push, new transports, AI/MCP integration |
+| [Roadmap](https://github.com/hamedafzali/HRpc/blob/main/docs/ROADMAP.md) | Planned work, cross-platform notes, and how HRpc compares to gRPC, StreamJsonRpc and H.Pipes |
 | [Releasing](https://github.com/hamedafzali/HRpc/blob/main/docs/RELEASING.md) | How versions are published to NuGet (maintainers) |
 
 Source: [github.com/hamedafzali/HRpc](https://github.com/hamedafzali/HRpc) · License: MIT

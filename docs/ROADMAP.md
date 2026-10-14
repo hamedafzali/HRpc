@@ -1,16 +1,29 @@
 # HRpc Roadmap
 
-Where HRpc is heading. This is a plan, not a promise: priorities can change, and nothing here
-ships until it appears in [`CHANGELOG.md`](../CHANGELOG.md).
+Where HRpc is heading, and why. This is a plan, not a promise: priorities can change, and
+nothing here ships until it appears in [`CHANGELOG.md`](../CHANGELOG.md).
 
-Guiding rules:
+_Last reviewed: 2026-10-14._
 
-- **Stay small.** HRpc is newline-delimited JSON over a stream. New features build on that
-  envelope; they don't replace it.
-- **Non-breaking by default.** Everything up to 2.0 is additive. Public API is removed only
-  in a major version (see [Versioning](RELEASING.md#versioning)).
-- **Transports share one core.** A new transport should only supply "open a stream". Framing,
-  request/response and error handling are written once.
+## Where HRpc fits
+
+There are mature options for .NET inter-process communication. HRpc should not try to beat
+them at their own game. It should be the best choice in its own niche.
+
+| Option | Strengths | Costs | Pick it when |
+|--------|-----------|-------|--------------|
+| **gRPC** over UDS / named pipes ([built into ASP.NET Core, .NET 8+](https://learn.microsoft.com/aspnet/core/grpc/interprocess)) | Contracts, codegen, streaming, every language | `.proto` files, codegen, ASP.NET Core host, no `net48` server | Large systems with a strict schema |
+| **[StreamJsonRpc](https://github.com/microsoft/vs-streamjsonrpc)** (JSON-RPC 2.0) | Standard protocol, method proxies, cancellation, MessagePack | Method-call model, more concepts to learn | Calling methods on another process |
+| **[H.Pipes](https://github.com/HavenDV/H.Pipes)** | Typed messages, multi-client pipe server | Named pipes only. Defaults to `BinaryFormatter`. | Windows desktop, .NET on both ends |
+| **HRpc** | Events and request/response, one dependency-free package, `net48` to `net10`, a wire format any language can speak in about 20 lines | Smaller feature set, younger ecosystem | Simple messaging between local processes, including non-.NET ones |
+
+**HRpc's niche:** the simplest way to connect a .NET process to anything else (another .NET
+app, a Python script, an Electron/Tauri UI, an AI agent) with plain newline-delimited JSON
+over TCP, pipes, stdio or WebSockets. The plan below reinforces that niche:
+
+1. **Run everywhere .NET runs.** Current target frameworks, all three desktop OSes, AOT.
+2. **Speak to everything.** A language-neutral protocol spec plus small reference clients.
+3. **Fill the gaps users hit first:** server push, cancellation, security defaults.
 
 ## Shipped
 
@@ -20,61 +33,132 @@ Guiding rules:
 | 1.3.0 | Correlated request/response: `OnRequest` on servers, `SendAndWaitAsync` on connections. |
 | 1.3.1 | Writes serialized per connection (fixes frame corruption under concurrent sends). `Logger` marked `[Obsolete]`. CI on Node 24 actions. |
 
-## 1.4.0: core cleanup and server push (non-breaking)
+## 1.3.2 / 1.4.0: urgent platform work (do first)
+
+- **Add a `net10.0` target.** .NET 8 and .NET 9 both reach
+  [end of support on 2026-11-10](https://devblogs.microsoft.com/dotnet/dotnet-8-9-end-of-support/).
+  .NET 10 is the current LTS, supported until November 2028.
+  - Keep `net8.0`: it costs nothing and covers users who can't upgrade yet.
+  - `net9.0` can be dropped later. .NET 9 apps fall back to the `net8.0` build.
+  - CI already builds net10 as an informational job. Promote it to a required test job.
+- **Add macOS to CI.** Today CI covers Windows (`net48`) and Linux. macOS has the shortest
+  Unix-socket path limit, which affects pipe names (see
+  [Cross-platform notes](#cross-platform-notes)).
+- **Opt-in `CurrentUserOnly` for pipes.** HRpc pipes currently accept any local user. Add a
+  server/client option that passes `PipeOptions.CurrentUserOnly`. It's additive, so the
+  default stays unchanged until 2.0.
+
+## 1.4.0: core cleanup, server push, cancellation
 
 1. **Shared stream-transport base class.** `TcpConnection`/`PipeConnection` and
-   `TcpServer`/`PipeServer` are about 85% identical. Move the receive loop, framing, write lock,
-   request/response correlation and error handling into one internal base. Every later
-   transport depends on this.
-2. **Server push.**
+   `TcpServer`/`PipeServer` are about 85% identical. Move the receive loop, framing, write
+   lock, request/response correlation and error handling into one internal base, so every
+   later transport only supplies "open a stream".
+2. **Server push**, the most common gap in event-style IPC.
    - Client IDs on `ClientConnected` and `MessageReceived`.
    - `SendAsync(clientId, message)` and `BroadcastAsync(message)` on servers.
-   - A per-client write lock (same fix as 1.3.1, on the server side).
+   - A per-client write lock.
+3. **Request cancellation.** When the `CancellationToken` passed to `SendAndWaitAsync` fires,
+   send a `cancel` envelope with the request's `cid`. `OnRequest` handlers then receive a
+   token that trips. StreamJsonRpc has this, and long-running requests (AI calls especially)
+   need it. Purely additive on the wire: a new `type` value.
+4. **Run `OnRequest` handlers off the receive loop.** Today one slow handler blocks every
+   other message on that connection. Add a concurrency limit option.
+5. **Optional heartbeat / dead-peer detection.** A configurable ping interval and timeout, so
+   a silently dropped peer is noticed without waiting for a write to fail.
 
-   This removes the current "no server-to-client channel beyond `PipeServer.InitialMessage`"
-   limit.
-3. **Run `OnRequest` handlers off the receive loop.** Today one slow handler blocks every other
-   message on that connection (head-of-line blocking).
-4. **Optional heartbeat / dead-peer detection.** A configurable ping interval and timeout, so a
-   silently dropped peer is noticed without waiting for a write to fail.
+## 1.5.0: transports and AOT
 
-## 1.5.0: new transports
+| Item | Why | Notes |
+|------|-----|-------|
+| **Stdio transport** | Talk to a child process over stdin/stdout. No ports, no pipe names, no firewall prompts. | The standard way editors, tools and MCP servers talk to helper processes. Also the easiest way for an Electron/Tauri app to run a .NET "sidecar" process. |
+| **WebSocket transport** | The only option in browsers (Blazor WebAssembly, web UIs). Works through proxies and across networks. | Server: `HttpListener`. Client: `ClientWebSocket`. No extra dependencies. |
+| **Unix domain socket transport** | An explicit, choosable socket path (e.g. under `$XDG_RUNTIME_DIR`). Python, Node, Go and Rust connect natively. Microsoft recommends UDS for cross-platform IPC. | Supported on Windows 10+ too. Complements, rather than replaces, named pipes. |
+| **TLS for TCP** | Encryption without an external tunnel. | `SslStream` around the existing TCP stream. |
+| **Native AOT / trimming support** | AOT is now common for CLI tools, sidecars and MCP servers. | Today `MessageEnvelope` is serialized with reflection-based System.Text.Json. Use a source-generated `JsonSerializerContext` internally. Add `JsonTypeInfo<T>` overloads for payloads. Set `IsAotCompatible` on `net8.0+` builds. |
 
-| Transport | Why | Notes |
-|-----------|-----|-------|
-| **Stdio** | Talk to a child process over stdin/stdout. Cheap on top of the 1.4 base. | Same model MCP servers use for local tools. |
-| **WebSocket** | Browser and cross-network clients, proxy friendly. | Server: `HttpListener`. Client: `ClientWebSocket`. No extra dependencies. |
-| **TLS for TCP** | Encryption without an external tunnel. | `SslStream` wrapped around the existing TCP stream. |
+Lower priority: an in-memory transport for tests.
 
-Lower priority: an in-memory transport for tests. Unix domain sockets add little over named
-pipes plus TCP, so they're not planned.
+## 1.6.0: cross-language support
 
-## 1.6.0: AI integration
+Any language can parse newline-delimited JSON. The missing piece is making that official.
 
-1. **Streaming responses.** A request can get several response chunks under one `cid`, read on
-   the caller's side as an `IAsyncEnumerable`. Useful for LLM token streams, progress
-   reporting and large result sets.
+1. **A language-neutral protocol spec.** Split the wire rules out of
+   [`PROTOCOL.md`](PROTOCOL.md), which also covers .NET API behavior, into a short spec:
+   framing, envelope fields, request/response, cancel, errors.
+2. **Conformance test vectors.** A folder of example messages and expected handling (valid,
+   malformed, oversized, unknown fields) that other implementations can test against.
+3. **Reference clients** for **Python** and **TypeScript/Node**, each a small package of a few
+   hundred lines, kept in this repo and tested in CI against the .NET server. These cover
+   the most common cases: Python scripts and ML tooling, and Electron or web UIs.
+
+## 1.7.0: AI integration
+
+1. **Streaming responses.** A request can get several response chunks under one `cid`, read
+   on the caller's side as an `IAsyncEnumerable`. Useful for LLM token streams, progress
+   reporting and large results. Builds on the 1.4 cancellation work.
 2. **`HRpc.Mcp`, a separate package.** It exposes `OnRequest` handlers as
-   [Model Context Protocol](https://modelcontextprotocol.io) tools, built on the official C# MCP
-   SDK. That lets an AI assistant call into an HRpc app.
+   [Model Context Protocol](https://modelcontextprotocol.io) tools, built on the official
+   [C# MCP SDK](https://csharp.sdk.modelcontextprotocol.io/). The SDK's transports are stdio
+   (local) and Streamable HTTP (remote). This lets AI assistants like Claude, Copilot and
+   Cursor call into an HRpc application.
    - MCP is JSON-RPC 2.0, so HRpc's own wire format can't simply "be" MCP. A bridge package
      keeps the core protocol unchanged and free of dependencies.
+   - The bridge is net8.0+ only, matching the SDK.
 
-HRpc will **not** embed an LLM client. Calling a model is the application's job.
-
-## 2.0: breaking cleanup (only if needed)
-
-Bundled into one major release, and only once there's enough to justify it:
+## 2.0: breaking cleanup (only when there's enough to justify it)
 
 - Remove `Utils.Logger` (obsolete since 1.3.1).
 - Fix interface naming: `ITcpServer` is used for pipes too, and `IPipeConnection` inherits
   `ITcpConnection`.
-- Add the 1.3–1.6 methods (`SendAndWaitAsync`, `OnRequest`, push) to the interfaces. Until
-  then they live only on the concrete classes, to avoid breaking existing implementers.
+- Add the 1.3–1.7 methods (`SendAndWaitAsync`, `OnRequest`, push) to the interfaces.
+- Make pipes `CurrentUserOnly` by default (secure by default).
+- Re-evaluate `net48` + Newtonsoft versus `netstandard2.0` + System.Text.Json. One serializer
+  everywhere would remove a whole class of behavior differences between `net48` and `net8.0+`.
+  It could also make HRpc usable from Unity (see below).
+
+## Cross-platform notes
+
+How HRpc behaves on each platform today, and what the plan changes.
+
+| Platform | TCP | Named pipes | Notes / plan |
+|----------|-----|-------------|--------------|
+| **Windows** (`net48`, `net8+`) | ✅ | ✅ Native Windows pipes | Fully tested in CI. |
+| **Linux** (`net8+`) | ✅ | ✅ Emulated (see below) | Tested in CI. |
+| **macOS** (`net8+`) | ✅ | ✅ Emulated, short-path caveat | **Not in CI yet**. Added in 1.3.2/1.4. |
+| **Browser / Blazor WASM** | ❌ No raw sockets | ❌ | Needs the WebSocket transport (1.5). |
+| **Android / iOS (MAUI)** | ✅ Probably | Not useful | Untested. TCP to a desktop or server is the realistic use. |
+| **Unity** | Untested | Untested | IL2CPP builds have reported `NamedPipeServerStream` failures. Revisit with the 2.0 `netstandard2.0` question. |
+| **Non-.NET peers** | ✅ | ⚠️ See below | Any language can speak the wire format today. Reference clients and a UDS transport make it first-class (1.5–1.6). |
+
+**Named pipes outside Windows.** On Linux and macOS, .NET implements
+`NamedPipeServerStream`/`NamedPipeClientStream` on top of Unix domain sockets. The socket file
+is created at `/tmp/<pipeName>`
+([runtime source](https://source.dot.net/dotnet/NamedPipeUtil.cs.html)). Consequences:
+
+- A non-.NET process must connect to the Unix socket `/tmp/<pipeName>`. It is not a FIFO
+  (`mkfifo`) and not a Windows-style `\\.\pipe\` path.
+- macOS has a short socket-path limit (104 bytes), so keep pipe names short.
+- `PipeSecurity` ACLs are Windows-only. On Unix, access is controlled by the socket file's
+  permissions, which is another reason for the `CurrentUserOnly` option.
+- Pipes are same-machine only on every OS. HRpc does not support remote Windows pipes over
+  SMB, by design. Use TCP, TLS or WebSocket across machines.
+
+## Considered, not planned
+
+| Idea | Why not |
+|------|---------|
+| **Embedding an LLM client** | Calling a model is the application's job. HRpc carries the messages; `HRpc.Mcp` covers the AI-tool use case. |
+| **Full JSON-RPC 2.0 compatibility mode** | StreamJsonRpc already does this well. HRpc's value is its simpler event-plus-request model. |
+| **MessagePack / binary payloads** | Would break "any language in 20 lines". Revisit only with measured demand. |
+| **Remote Windows named pipes (SMB)** | Windows-only and firewall-hostile. TCP+TLS or WebSocket covers it. |
+| **Service discovery / message broker** | Out of scope. Use a real broker (RabbitMQ, NATS, Redis) for many-to-many messaging. |
 
 ## Known gaps (not yet scheduled)
 
-- **Authentication.** There is no handshake or credential check. Run behind a trusted boundary.
+- **Authentication.** No handshake or credential check. Run behind a trusted boundary.
+  `CurrentUserOnly` (pipes) and TLS (TCP) cover the local and transport parts. A token
+  handshake is a candidate for after 1.5.
 - **Auto-reconnect.** A dropped client stays dropped. The application must reconnect.
-- **Encryption.** None until TLS lands in 1.5. Use a TLS tunnel for anything internet-facing.
+  A candidate for after 1.4, once heartbeats exist to detect drops.
 - **Replay protection.** None, and none planned at the library level.
