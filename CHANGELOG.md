@@ -4,6 +4,31 @@ All notable changes to HRpc are documented in this file.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-14
+
+### Fixed
+
+- **Concurrent sends could corrupt messages on the wire.** `TcpConnection` and
+  `PipeConnection` wrote to their stream with no synchronization, so two tasks calling
+  `SendAsync`/`SendAndWaitAsync` at the same time could interleave partial writes and break
+  the newline framing. The peer then saw malformed lines (dropped as recoverable parse
+  errors), and any affected `SendAndWaitAsync` call timed out. Firing several
+  `SendAndWaitAsync` calls in parallel, the natural way to use 1.3.0's request/response,
+  reproduced it reliably with larger payloads. Writes are now serialized per connection
+  with a `SemaphoreSlim`.
+
+### Deprecated
+
+- `HRpc.Utils.Logger` is marked `[Obsolete]`. HRpc itself never used it; it will be
+  removed in 2.0.
+
+### Changed
+
+- CI: `actions/checkout` and `actions/setup-dotnet` bumped from v4 to v5 (Node 24
+  runtime), clearing the Node 20 deprecation warning.
+
+## [1.3.0] - 2026-09-14
+
 ### Added
 
 - **Correlated request/response.** Activates the `cid`/`type`/`error` `MessageEnvelope`

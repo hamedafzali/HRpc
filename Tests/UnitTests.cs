@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -2232,6 +2233,62 @@ namespace HRpc.Tests
 
             await client.CloseAsync();
             await server.StopAsync();
+        }
+
+        [TestMethod]
+        [Timeout(20000)]
+        public async Task Tcp_ConcurrentSendAndWaitAsync_ShouldNotInterleaveWrites()
+        {
+            var port = GetFreePort();
+            using var server = new Server { TransportType = TransportType.Tcp };
+            server.OnRequest("Echo", msg => Task.FromResult<object?>(msg.GetPayloadAsString()));
+            await server.StartAsync(port.ToString());
+
+            using var client = new Connection { TransportType = TransportType.Tcp };
+            await client.ConnectAsync($"127.0.0.1:{port}");
+
+            await AssertConcurrentEchoesIntact(client);
+
+            await client.CloseAsync();
+            await server.StopAsync();
+        }
+
+        [TestMethod]
+        [Timeout(20000)]
+        public async Task Pipe_ConcurrentSendAndWaitAsync_ShouldNotInterleaveWrites()
+        {
+            var pipeName = "hrpc-concurrent-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            using var server = new Server { TransportType = TransportType.Pipe };
+            server.OnRequest("Echo", msg => Task.FromResult<object?>(msg.GetPayloadAsString()));
+            await server.StartAsync(pipeName);
+
+            using var client = new Connection { TransportType = TransportType.Pipe };
+            await client.ConnectAsync(pipeName);
+
+            await AssertConcurrentEchoesIntact(client);
+
+            await client.CloseAsync();
+            await server.StopAsync();
+        }
+
+        // Large, distinct payloads sent from many tasks at once: without a write lock, partial
+        // writes from different callers interleave on the stream and corrupt the line framing.
+        private static async Task AssertConcurrentEchoesIntact(Connection client)
+        {
+            const int callCount = 64;
+            var payloads = Enumerable.Range(0, callCount)
+                .Select(i => new string((char)('a' + (i % 26)), 64 * 1024) + i)
+                .ToArray();
+
+            var calls = payloads
+                .Select(p => Task.Run(() => client.SendAndWaitAsync(new EventMessage("Echo", p), TimeSpan.FromSeconds(10))))
+                .ToArray();
+            var responses = await Task.WhenAll(calls);
+
+            for (var i = 0; i < callCount; i++)
+            {
+                Assert.AreEqual(payloads[i], responses[i].GetPayloadAsString(), $"Response {i} did not match its request.");
+            }
         }
 
         private static System.Collections.IDictionary GetClientTaskDictionary(object server)

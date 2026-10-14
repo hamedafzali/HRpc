@@ -28,6 +28,9 @@ namespace HRpc.Core
         private IPEndPoint? _remoteEndPoint;
 
         private readonly object _stateLock = new object();
+        // Serializes writes: concurrent WriteAsync calls on one stream can interleave partial
+        // writes and corrupt the newline framing.
+        private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
         private CancellationTokenSource? _receiveCts;
         private Task? _receiveTask;
         private bool _isConnected;
@@ -146,11 +149,19 @@ namespace HRpc.Core
 
             var bytes = Encoding.UTF8.GetBytes(envelope.Serialize() + "\n");
 
+            await _writeLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
 #if NETFRAMEWORK
-            await _stream.WriteAsync(bytes, 0, bytes.Length);
+                await _stream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
 #else
-            await _stream.WriteAsync(bytes);
+                await _stream.WriteAsync(bytes).ConfigureAwait(false);
 #endif
+            }
+            finally
+            {
+                _writeLock.Release();
+            }
         }
 
         /// <summary>
