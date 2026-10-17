@@ -41,8 +41,11 @@ against the released 1.3.2 package, loaded side by side (`Tests/CompatibilityTes
 
 - **`PipeServer` spun and leaked while idle.** Its accept loop created a new waiting pipe
   instance on every pass, without waiting for the previous one to receive a client, so an
-  idle server kept a CPU core busy and its memory kept growing. It now keeps exactly one
-  instance waiting.
+  idle server kept a CPU core busy and its memory kept growing. It now keeps one instance
+  waiting plus one spare. The spare matters on Linux and macOS, where instances share a
+  listening socket that closes with the last one: with no spare, a burst of short-lived
+  clients could leave no instance alive and silently lose clients that had already
+  connected and sent.
 - **A reply that arrives after its request timed out or was cancelled is dropped.** It used
   to surface as a stray `MessageReceived` event. A reply with a `cid` the client never sent
   still surfaces, as before.

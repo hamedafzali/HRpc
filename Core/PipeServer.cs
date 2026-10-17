@@ -164,15 +164,25 @@ namespace HRpc.Core
         private async Task RunAcceptLoopAsync(string pipeName, CancellationToken serverToken)
         {
             var currentUserOnly = CurrentUserOnly;
+            NamedPipeServerStream? spare = null;
 
             try
             {
+                // Two instances exist at a time: one waiting for a client, plus an idle spare
+                // that becomes the next waiting instance. Before 1.4 a new instance was created
+                // on every loop iteration without waiting, which leaked instances and spun a CPU
+                // core while idle. One instance alone is not enough:
+                // - On Unix, instances of one name share a listening socket that closes with the
+                //   last instance. If a short-lived client's instance is disposed before the next
+                //   one exists, clients already queued on that socket are silently dropped:
+                //   their connect succeeded, but no server ever sees them.
+                // - On Windows, a client that arrives while no instance exists has to retry.
+                spare = PipeAccess.CreateServer(pipeName, currentUserOnly);
+
                 while (!serverToken.IsCancellationRequested)
                 {
-                    // One waiting instance at a time; the next is created only once this one has a
-                    // client. Before 1.4 a new instance was created on every loop iteration
-                    // without waiting, which leaked instances and spun a CPU core while idle.
-                    var serverStream = PipeAccess.CreateServer(pipeName, currentUserOnly);
+                    var serverStream = spare;
+                    spare = PipeAccess.CreateServer(pipeName, currentUserOnly);
                     _waitingStream = serverStream;
 
                     try
@@ -219,6 +229,7 @@ namespace HRpc.Core
             }
             finally
             {
+                try { spare?.Dispose(); } catch { }
                 _running = false;
             }
         }

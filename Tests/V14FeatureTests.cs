@@ -72,17 +72,60 @@ namespace HRpc.Tests
             server.OnRequest("Echo", msg => Task.FromResult<object?>(msg.GetPayloadAsString()));
             await server.StartAsync(pipeName);
 
-            var calls = Enumerable.Range(0, 20).Select(async i =>
+            // Cleanup in finally: a failure here must not leave clients and a server running
+            // into the next tests.
+            var clients = new ConcurrentBag<PipeClientWrapper>();
+            try
+            {
+                var calls = Enumerable.Range(0, 20).Select(async i =>
+                {
+                    var client = new PipeClientWrapper();
+                    clients.Add(client);
+                    using var cts = new CancellationTokenSource(Wait);
+                    await client.ConnectAsync(pipeName, cts.Token);
+                    var reply = await client.SendAndWaitAsync(new EventMessage("Echo", "c" + i), Wait);
+                    await client.CloseAsync();
+                    return reply.GetPayloadAsString();
+                });
+
+                var replies = await Task.WhenAll(calls);
+                CollectionAssert.AreEquivalent(Enumerable.Range(0, 20).Select(i => "c" + i).ToArray(), replies);
+            }
+            finally
+            {
+                foreach (var client in clients)
+                {
+                    client.Dispose();
+                }
+
+                await server.StopAsync();
+            }
+        }
+
+        [TestMethod]
+        [Timeout(30000)]
+        public async Task PipeServer_ConnectionBurst_NoClientIsDropped()
+        {
+            // On Unix, pipe instances share a listening socket that closes with the last
+            // instance. With one instance at a time, a fast connect-send-close client could leave
+            // no instance alive, dropping clients queued behind it: their connect and send
+            // succeeded, yet the server never saw them. The accept loop keeps a spare instance.
+            var pipeName = NewPipeName();
+            var server = new PipeServer();
+            var received = new ConcurrentDictionary<string, bool>();
+            server.MessageReceived += (_, e) => received[e.Message.GetPayloadAsString()!] = true;
+            await server.StartAsync(pipeName);
+
+            const int clientCount = 100;
+            await Task.WhenAll(Enumerable.Range(0, clientCount).Select(i => Task.Run(async () =>
             {
                 var client = new PipeClientWrapper();
                 await client.ConnectAsync(pipeName);
-                var reply = await client.SendAndWaitAsync(new EventMessage("Echo", "c" + i), Wait);
+                await client.SendAsync(new EventMessage("Burst", "c" + i));
                 await client.CloseAsync();
-                return reply.GetPayloadAsString();
-            });
+            })));
 
-            var replies = await Task.WhenAll(calls);
-            CollectionAssert.AreEquivalent(Enumerable.Range(0, 20).Select(i => "c" + i).ToArray(), replies);
+            await WaitUntil(() => received.Count == clientCount, 15000);
             await server.StopAsync();
         }
 
