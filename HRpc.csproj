@@ -14,6 +14,24 @@
     <PackageTags>ipc;named-pipes;tcp;messaging;eventbus;duplex;desktop;dotnet;rpc;csharp</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- Shown on nuget.org's "Release Notes" tab and in Visual Studio's package manager.
+         Plain text, not Markdown. Rewrite it for every release (see docs/RELEASING.md). -->
+    <PackageReleaseNotes>1.4.0 - compatible with 1.3 in both directions; all new behavior is opt-in.
+
+New:
+- Server push: Server.SendAsync(clientId, message), BroadcastAsync(message), ConnectedClients.
+- Client ids on server-side events and in the new RequestContext.
+- Request cancellation: a timed-out or cancelled SendAndWaitAsync stops the handler on a 1.4 server (OnRequest overload with RequestContext.CancellationToken).
+- MaxConcurrentRequests (default 1, as before) runs a client's requests in parallel.
+- KeepAlive for TCP and CurrentUserOnly for named pipes.
+
+Fixed:
+- PipeServer busy-looped while idle, and could drop clients during connection bursts on Linux and macOS.
+- Late replies to timed-out requests no longer show up as MessageReceived events.
+- A throwing ClientConnected subscriber no longer stops a TcpServer accepting clients.
+
+Full changelog: https://github.com/hamedafzali/HRpc/blob/main/CHANGELOG.md
+Samples: https://github.com/hamedafzali/HRpc/blob/main/docs/SAMPLES.md</PackageReleaseNotes>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <!-- TODO: no PackageIcon set — no image file available yet. Once one is added
          (e.g. icon.png, 128x128), wire it up with <PackageIcon>icon.png</PackageIcon>

@@ -76,6 +76,17 @@ against the released 1.3.2 package, loaded side by side (`Tests/CompatibilityTes
   traffic carries no `caps`, that `hello` is sent only in reply to `caps`, and that `cancel`
   is sent only after `hello`.
 
+### Documentation
+
+- New [docs/SAMPLES.md](docs/SAMPLES.md): ten complete, runnable programs. They cover typed
+  requests, handler errors, a desktop app and its background service, progress updates,
+  cancellation, a chat room, a reconnecting client, graceful shutdown, hosting in a worker
+  service, and testing handlers.
+- README examples that used `EventMessage` now include `using HRpc.Models;`, so they compile
+  as written.
+- The package now has release notes on nuget.org, and each published tag gets a GitHub
+  Release with its changelog section.
+
 ## [1.3.2] - 2026-10-14
 
 ### Added

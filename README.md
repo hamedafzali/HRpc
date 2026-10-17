@@ -61,6 +61,7 @@ HRpc provides unified `Connection` and `Server` classes for both TCP and Named P
 ```csharp
 using HRpc;
 using HRpc.Core;
+using HRpc.Models;
 
 var connection = new Connection();
 connection.TransportType = TransportType.Tcp;
@@ -81,6 +82,7 @@ await connection.CloseAsync();
 ```csharp
 using HRpc;
 using HRpc.Core;
+using HRpc.Models;
 
 var connection = new Connection();
 connection.TransportType = TransportType.Pipe;
@@ -134,6 +136,8 @@ await server.StartAsync("my-hrpc-pipe");
 
 ## Advanced Usage
 
+For complete programs covering common situations (a desktop app talking to its background service, progress updates, cancel buttons, a chat room, reconnecting, hosting in a worker service, testing), see [Samples](https://github.com/hamedafzali/HRpc/blob/main/docs/SAMPLES.md).
+
 ### Structured (typed) payloads
 
 Send a POCO or anonymous object directly -- it is serialized and embedded as a nested JSON value, not a re-escaped string:
@@ -169,6 +173,7 @@ For a correlated call-and-reply pattern -- send a request, get exactly one match
 ```csharp
 using HRpc;
 using HRpc.Core;
+using HRpc.Models;
 
 // Server
 var server = new Server { TransportType = TransportType.Tcp };
@@ -372,6 +377,7 @@ await client.CloseAsync();
 
 | Document | Contents |
 |----------|----------|
+| [Samples](https://github.com/hamedafzali/HRpc/blob/main/docs/SAMPLES.md) | Complete, runnable programs: typed calls, errors, desktop app and service, progress, cancellation, chat, reconnecting, shutdown, hosting, testing |
 | [Protocol](https://github.com/hamedafzali/HRpc/blob/main/docs/PROTOCOL.md) | Wire format, versioning, request/response semantics, error-handling rules |
 | [Changelog](https://github.com/hamedafzali/HRpc/blob/main/CHANGELOG.md) | Every release, with migration notes |
 | [Roadmap](https://github.com/hamedafzali/HRpc/blob/main/docs/ROADMAP.md) | Planned work, cross-platform notes, and how HRpc compares to gRPC, StreamJsonRpc and H.Pipes |

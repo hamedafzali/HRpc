@@ -15,6 +15,16 @@ triggered by pushing a `v*` tag (e.g. `v1.4.0`, `v1.4.0-preview.1`). The workflo
 4. Packs and pushes both `.nupkg` and `.snupkg` via **NuGet Trusted Publishing (OIDC)**: a
    GitHub-issued OIDC token is exchanged for a short-lived NuGet API key by
    `NuGet/login@v1`. No long-lived `NUGET_API_KEY` secret is stored or used.
+5. Creates a GitHub Release for the tag, using that version's `CHANGELOG.md` section as the
+   notes (marked pre-release for a `-suffix` tag). Re-running the job updates the notes.
+
+## Where users see what changed
+
+- **nuget.org "Release Notes" tab and Visual Studio's package manager:** `<PackageReleaseNotes>`
+  in `HRpc.csproj`. Plain text, written by hand for each release.
+- **GitHub Releases page and "watch releases" notifications:** created by the publish workflow
+  from `CHANGELOG.md`. A tag with no matching `## [X.Y.Z]` heading gets a release with links only.
+- **[`CHANGELOG.md`](../CHANGELOG.md):** the full record, linked from the README.
 
 A pre-release suffix (`-preview.1`, `-rc.1`, …) publishes as a pre-release package.
 
@@ -33,6 +43,8 @@ to isolate. If the exchange 401s, check the username before touching the policy.
 
 - [ ] `<Version>` bumped in `HRpc.csproj` (see [Versioning](#versioning)).
 - [ ] `CHANGELOG.md`: move `[Unreleased]` items under a new `## [X.Y.Z] - YYYY-MM-DD` heading.
+- [ ] `<PackageReleaseNotes>` in `HRpc.csproj` rewritten for this version: a short summary, compatibility, and the changelog link.
+- [ ] New features have an example in `README.md` or [`docs/SAMPLES.md`](SAMPLES.md).
 - [ ] `README.md` and [`docs/PROTOCOL.md`](PROTOCOL.md) match the current API and wire format.
 - [ ] [`docs/ROADMAP.md`](ROADMAP.md): move the shipped items to "Shipped".
 
@@ -76,6 +88,8 @@ dotnet nuget push ./artifacts/HRpc.<VERSION>.nupkg --api-key <key> \
 ### 4. Post-publish
 
 - [ ] The package page is live and the README renders: https://www.nuget.org/packages/HRpc
+- [ ] The package's Release Notes tab shows this version's notes.
+- [ ] The GitHub Release exists with the right notes: https://github.com/hamedafzali/HRpc/releases
 - [ ] A clean sample installs it: `dotnet add package HRpc --version <VERSION>`
 - [ ] A basic connect/send/receive smoke test passes.
 - [ ] Optional: create a GitHub release from the tag, with the CHANGELOG entry as its body.

@@ -206,3 +206,51 @@ jobs:
           echo "workflow_dispatch dry run finished: build, test, pack, and the version guard all ran against $VERSION. Nothing was pushed to NuGet.org -- the push steps are unconditionally skipped for this trigger."
         env:
           VERSION: ${{ steps.version.outputs.version }}
+
+  # After the package is on NuGet, create a GitHub Release for the tag, with that version's
+  # CHANGELOG.md section as its notes. This fills the repo's Releases page and notifies anyone
+  # watching releases. Runs only for real tag pushes, never for dry runs. Re-running it for a
+  # tag that already has a release updates the notes instead of failing.
+  github-release:
+    name: GitHub Release
+    needs: publish
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+
+          # The lines between "## [VERSION]" and the next "## [" heading.
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+
+          if [ -z "$(tr -d '[:space:]' < notes.md)" ]; then
+            echo "::warning::CHANGELOG.md has no section for $VERSION; the release links to the changelog instead."
+            : > notes.md
+          fi
+          {
+            echo
+            echo "Install: \`dotnet add package HRpc --version $VERSION\` · [NuGet](https://www.nuget.org/packages/HRpc/$VERSION) · [Full changelog](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md) · [Samples](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/SAMPLES.md)"
+          } >> notes.md
+
+          PRERELEASE=""
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE="--prerelease"
+          fi
+
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "HRpc $VERSION" --notes-file notes.md $PRERELEASE
+          else
+            gh release create "$TAG" --verify-tag --title "HRpc $VERSION" --notes-file notes.md $PRERELEASE
+          fi
