@@ -412,8 +412,19 @@ namespace HRpc.Tests
             var handlerCancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             server.OnRequest("Slow", async (msg, ctx) =>
             {
-                using var registration = ctx.CancellationToken.Register(() => handlerCancelled.TrySetResult(true));
-                await Task.Delay(Timeout.Infinite, ctx.CancellationToken);
+                // Observed by catching, not with ctx.CancellationToken.Register: on .NET Framework,
+                // Cancel() runs Task.Delay's callback first, which resumes this handler inline, and
+                // disposing a registration from a `using` here unregisters it before it runs.
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, ctx.CancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    handlerCancelled.TrySetResult(true);
+                    throw;
+                }
+
                 return null;
             });
             await server.StartAsync(port);
@@ -474,8 +485,17 @@ namespace HRpc.Tests
             server.OnRequest("Slow", async (msg, ctx) =>
             {
                 started.TrySetResult(true);
-                using var registration = ctx.CancellationToken.Register(() => handlerCancelled.TrySetResult(true));
-                await Task.Delay(Timeout.Infinite, ctx.CancellationToken);
+                try
+                {
+                    // Caught rather than Register()ed; see Timeout_AlsoCancelsTheServerHandler.
+                    await Task.Delay(Timeout.Infinite, ctx.CancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    handlerCancelled.TrySetResult(true);
+                    throw;
+                }
+
                 return null;
             });
             await server.StartAsync(port);
