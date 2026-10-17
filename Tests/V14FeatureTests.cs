@@ -75,6 +75,7 @@ namespace HRpc.Tests
             // Cleanup in finally: a failure here must not leave clients and a server running
             // into the next tests.
             var clients = new ConcurrentBag<PipeClientWrapper>();
+            using var threads = EnoughThreadsFor(20);
             try
             {
                 var calls = Enumerable.Range(0, 20).Select(async i =>
@@ -117,16 +118,31 @@ namespace HRpc.Tests
             await server.StartAsync(pipeName);
 
             const int clientCount = 100;
-            await Task.WhenAll(Enumerable.Range(0, clientCount).Select(i => Task.Run(async () =>
+            var clients = new ConcurrentBag<PipeClientWrapper>();
+            using var threads = EnoughThreadsFor(clientCount);
+            try
             {
-                var client = new PipeClientWrapper();
-                await client.ConnectAsync(pipeName);
-                await client.SendAsync(new EventMessage("Burst", "c" + i));
-                await client.CloseAsync();
-            })));
+                await Task.WhenAll(Enumerable.Range(0, clientCount).Select(i => Task.Run(async () =>
+                {
+                    var client = new PipeClientWrapper();
+                    clients.Add(client);
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await client.ConnectAsync(pipeName, cts.Token);
+                    await client.SendAsync(new EventMessage("Burst", "c" + i));
+                    await client.CloseAsync();
+                })));
 
-            await WaitUntil(() => received.Count == clientCount, 15000);
-            await server.StopAsync();
+                await WaitUntil(() => received.Count == clientCount, 15000);
+            }
+            finally
+            {
+                foreach (var client in clients)
+                {
+                    client.Dispose();
+                }
+
+                await server.StopAsync();
+            }
         }
 
         // ---- server push and client ids ---------------------------------------------------
@@ -920,6 +936,27 @@ namespace HRpc.Tests
         }
 
         // ---- helpers ------------------------------------------------------------------------
+
+        /// <summary>
+        /// On Windows, NamedPipeClientStream.ConnectAsync blocks a thread-pool thread until a
+        /// server instance is free. Many clients connecting at once from one process (unlike real
+        /// clients, each in its own process) then fill the pool, the server's accept loop waits
+        /// for a thread, and .NET Framework adds threads only about twice a second. Raising the
+        /// pool minimum for the test keeps it measuring the server, not thread injection.
+        /// </summary>
+        internal static IDisposable EnoughThreadsFor(int clients)
+        {
+            ThreadPool.GetMinThreads(out var workers, out var io);
+            ThreadPool.SetMinThreads(Math.Max(workers, clients + 16), io);
+            return new Restore(() => ThreadPool.SetMinThreads(workers, io));
+        }
+
+        private sealed class Restore : IDisposable
+        {
+            private readonly Action _restore;
+            public Restore(Action restore) => _restore = restore;
+            public void Dispose() => _restore();
+        }
 
         internal static string NewPipeName() => "hrpc14-" + Guid.NewGuid().ToString("N").Substring(0, 8);
 

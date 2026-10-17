@@ -371,6 +371,7 @@ await client.CloseAsync();
 - A server handles each client's messages in arrival order. With the default `MaxConcurrentRequests = 1`, it finishes each request handler before reading on.
 - A 1.4 client and a 1.3 server, or the reverse, work together. New features that need both sides (request cancellation) turn themselves off against a 1.3 peer.
 - `EventDispatcher.Subscribe(...)` returns `IDisposable`; dispose it to unsubscribe.
+- On Windows, a pipe `ConnectAsync` holds a thread-pool thread while it waits for the server. Opening dozens of pipe connections at once from one process can briefly starve the pool; connect them in smaller batches or raise `ThreadPool.SetMinThreads`.
 - There is no built-in authentication or encryption. For internet-facing use, run behind TLS and an authentication boundary.
 
 ## Documentation
