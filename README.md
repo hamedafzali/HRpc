@@ -191,6 +191,65 @@ await client.CloseAsync();
 
 If the handler throws, `SendAndWaitAsync` throws `RequestFailedException` (with `Code`/`Message` from the handler's exception) on the client. If no matching response arrives within the timeout, it throws `TimeoutException`. If the connection drops while a call is pending, it throws `InvalidOperationException`. `OnRequest` can be called before or after `StartAsync`. An `eventName` with no registered handler falls through to `MessageReceived` as usual -- this is purely additive to the existing pub/sub API.
 
+### Cancelling requests
+
+Pass a `CancellationToken` to `SendAndWaitAsync`, or let the timeout expire. Either way, a 1.4+ server cancels the handler's work. To observe that, register the handler with the two-parameter overload, which also tells you which client is calling:
+
+```csharp
+server.OnRequest("Report", async (msg, ctx) =>
+{
+    // ctx.CancellationToken trips if the caller cancels or times out, disconnects, or the server stops.
+    var report = await BuildReportAsync(msg.GetPayload<ReportQuery>()!, ctx.CancellationToken);
+    return report;
+});
+
+using var cts = new CancellationTokenSource();
+var pending = client.SendAndWaitAsync(new EventMessage("Report", query), TimeSpan.FromSeconds(30), cts.Token);
+cts.Cancel(); // the caller gets TaskCanceledException, and the server stops BuildReportAsync
+```
+
+A cancelled request gets no reply. A reply that still arrives after a timeout or cancellation is discarded rather than raised as `MessageReceived`. Against a 1.3 server, cancellation only affects the caller, exactly as before: nothing extra is sent.
+
+### Server push
+
+A server can send events to one client or to all of them. Every connected client has an id, available as `ClientId` on `ClientConnected`, `ClientDisconnected`, server-side `MessageReceived`, and the request context:
+
+```csharp
+server.ClientConnected += (_, e) => Console.WriteLine($"client {e.ClientId} connected");
+server.MessageReceived += (_, e) => Console.WriteLine($"{e.ClientId} sent {e.Message.EventName}");
+
+await server.SendAsync(clientId, new EventMessage("PriceChanged", price)); // one client
+int reached = await server.BroadcastAsync(new EventMessage("Shutdown", "in 5 min")); // all clients
+IReadOnlyCollection<string> ids = server.ConnectedClients;
+```
+
+Pushed messages arrive on the client as ordinary `MessageReceived` events, so clients on any version, including 1.3, receive them. `SendAsync` throws `InvalidOperationException` if the client is unknown or has disconnected. `BroadcastAsync` skips clients that fail and returns how many it reached.
+
+### Concurrent requests
+
+By default a server handles each client's messages one at a time, in order, as in 1.3. To let one client's slow requests run side by side, raise `MaxConcurrentRequests`:
+
+```csharp
+var server = new Server { TransportType = TransportType.Tcp, MaxConcurrentRequests = 8 };
+```
+
+It is a per-client limit. Events are still delivered in order but no longer wait for running handlers, and replies come back as handlers finish. `SendAndWaitAsync` matches them by id, so callers are unaffected.
+
+### Detecting dead peers and restricting pipes
+
+```csharp
+// TCP keepalive: detect a peer that vanished without closing (cable pulled, VM paused).
+var client = new Connection { TransportType = TransportType.Tcp, KeepAlive = TimeSpan.FromSeconds(30) };
+var server = new Server { TransportType = TransportType.Tcp, KeepAlive = TimeSpan.FromSeconds(30) };
+
+// Named pipes: only processes running as the current user may connect (server),
+// and only a server running as the current user is accepted (client).
+var pipeServer = new Server { TransportType = TransportType.Pipe, CurrentUserOnly = true };
+var pipeClient = new Connection { TransportType = TransportType.Pipe, CurrentUserOnly = true };
+```
+
+Both are off by default and change nothing on the wire, so they work with peers on any version. With `KeepAlive` set, a dead peer is detected about that long plus a few seconds after traffic stops, and the connection then closes and raises `Disconnected` or `ClientDisconnected`.
+
 ### EventDispatcher for pub/sub patterns
 
 Use `EventDispatcher` to subscribe to specific events and emit messages.
@@ -304,6 +363,8 @@ await client.CloseAsync();
 - A message larger than `MaxMessageSizeBytes` (default 1 MiB) is fatal: `ErrorOccurred` fires with `LineTooLongException` and the connection is dropped.
 - A throwing `MessageReceived` subscriber doesn't disconnect the connection or block other subscribers.
 - `IsConnected` reflects tracked connection state, not a raw socket check.
+- A server handles each client's messages in arrival order. With the default `MaxConcurrentRequests = 1`, it finishes each request handler before reading on.
+- A 1.4 client and a 1.3 server, or the reverse, work together. New features that need both sides (request cancellation) turn themselves off against a 1.3 peer.
 - `EventDispatcher.Subscribe(...)` returns `IDisposable`; dispose it to unsubscribe.
 - There is no built-in authentication or encryption. For internet-facing use, run behind TLS and an authentication boundary.
 

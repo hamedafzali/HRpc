@@ -241,6 +241,36 @@ namespace HRpc.Models
         public const string MessageTypeErrorResponse = "errorResponse";
 
         /// <summary>
+        /// Known <see cref="Type"/> value (v1.4.0+) a server sends once, and only to a client that
+        /// advertised <see cref="Caps"/>, to list the server's own capabilities. Never sent to a
+        /// 1.3 client. See docs/PROTOCOL.md.
+        /// </summary>
+        public const string MessageTypeHello = "hello";
+
+        /// <summary>
+        /// Known <see cref="Type"/> value (v1.4.0+) a client sends to cancel the in-flight request
+        /// with the same "cid". Only sent to a server whose hello listed
+        /// <see cref="CapabilityCancel"/>. See docs/PROTOCOL.md.
+        /// </summary>
+        public const string MessageTypeCancel = "cancel";
+
+        /// <summary>Capability name (v1.4.0+) for <see cref="MessageTypeCancel"/> support.</summary>
+        public const string CapabilityCancel = "cancel";
+
+        /// <summary>
+        /// Capability list (v1.4.0+). A 1.4 client puts it on its first request; a 1.4 server puts
+        /// it on its <see cref="MessageTypeHello"/> reply. Older peers ignore unknown fields, so
+        /// this is safe to send to them. Omitted from the wire entirely when null.
+        /// </summary>
+#if NETFRAMEWORK
+        [JsonProperty("caps", NullValueHandling = NullValueHandling.Ignore)]
+#else
+        [JsonPropertyName("caps")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+#endif
+        public string[]? Caps { get; set; }
+
+        /// <summary>
         /// Error payload for a future error-response layer (v1.3.0+). RESERVED: fields only, no
         /// propagation or interpretation logic exists in v1.2.0. Omitted from the wire entirely
         /// when null.

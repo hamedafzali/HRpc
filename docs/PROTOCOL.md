@@ -125,8 +125,9 @@ intentionally short — this schema is repeated on every single message.
 | `eventName` | string                   | Yes      | The event name / message topic, as supplied by the sender. |
 | `payload`   | any JSON value           | Yes      | The message payload, as supplied by the sender. **As of B3 (v1.2.0), this is typed JSON, not necessarily a string** — see [Payload representation](#payload-representation-b3) below. |
 | `cid`       | string                   | No       | Correlation id. Set by `SendAndWaitAsync` on a request and echoed back by the matching `response`/`errorResponse`. See [Request/response](#requestresponse-v130) below. |
-| `type`      | string                   | No       | Message-type discriminator: `event` (default/absent), `request`, `response`, `errorResponse`. See [Request/response](#requestresponse-v130) below. |
+| `type`      | string                   | No       | Message-type discriminator: `event` (default/absent), `request`, `response`, `errorResponse`, and since v1.4.0 `hello` and `cancel`. See [Request/response](#requestresponse-v130) and [Capabilities and cancellation](#capabilities-and-cancellation-v140) below. |
 | `error`     | object                   | No       | Error payload (`code` + `message`), present on `errorResponse` only. See [Request/response](#requestresponse-v130) below. |
+| `caps`      | array of strings         | No       | Capabilities the sender supports (v1.4.0+). Sent by a client on its first request and by a server in its `hello`. See [Capabilities and cancellation](#capabilities-and-cancellation-v140) below. |
 
 Example — a plain fire-and-forget event with a typed object payload (v1.2.0+):
 
@@ -296,6 +297,12 @@ throws does not propagate to `ErrorOccurred` or close the connection — it is t
 `errorResponse` envelope instead, consistent with the "one bad message shouldn't kill the
 connection" philosophy in [Error handling on receive](#error-handling-on-receive) above.
 
+Since v1.4.0 there is a second overload, `OnRequest(eventName, (message, context) => ...)`. Its
+`RequestContext` carries the calling client's `ClientId` and a `CancellationToken` that is
+cancelled when the client cancels the request, disconnects, or the server stops. See
+[Capabilities and cancellation](#capabilities-and-cancellation-v140). The one-parameter overload
+still works and behaves as before.
+
 #### Client: `SendAndWaitAsync`
 
 `Connection.SendAndWaitAsync(message, timeout, cancellationToken = default)` (and the
@@ -310,7 +317,10 @@ with a freshly generated `cid`, and returns a `Task<IEventMessage>` that complet
 - **Timeout**: if no matching response arrives within `timeout`, the task faults with
   `TimeoutException`. Distinguished internally from a caller-supplied `cancellationToken`
   cancellation (which instead propagates as `OperationCanceledException`/`TaskCanceledException`)
-  via a linked `CancellationTokenSource`.
+  via a linked `CancellationTokenSource`. Since v1.4.0, a response that arrives after the
+  timeout or cancellation is discarded (see
+  [Late responses are dropped](#late-responses-are-dropped)), and a 1.4+ server is told to
+  cancel the request.
 - **Connection drops while pending**: every still-pending `SendAndWaitAsync` call on that
   connection faults with `InvalidOperationException("Connection closed while awaiting a
   response.")`, so a dropped connection never leaves a caller awaiting forever.
@@ -337,6 +347,85 @@ is `null` unless explicitly set, and both serializers omit the key entirely when
 WhenWritingNull)]` for STJ). A plain `new MessageEnvelope(eventName, payload)` still serializes to
 exactly `{"v":2,"eventName":"...","payload":...}` with no `cid`/`type`/`error` keys present —
 request/response adds no bytes to fire-and-forget traffic that doesn't use it.
+
+### Capabilities and cancellation (v1.4.0)
+
+1.4.0 lets a client cancel a request it no longer wants, without changing anything a 1.3
+peer can see. It adds two message types and one field. All of it is opt-in by negotiation,
+so a 1.4 peer talking to a 1.3 peer behaves exactly like two 1.3 peers.
+
+**Negotiation.**
+
+1. A 1.4 client adds `"caps":["cancel"]` to its outgoing `request` envelopes until one of
+   them has been written successfully. In practice that is only the first request. Plain
+   events never carry `caps`, so fire-and-forget traffic is byte-for-byte what 1.3 sends.
+   A 1.3 server ignores the unknown field (see
+   [Unknown fields are ignored](#unknown-fields-are-ignored)).
+
+   ```json
+   {"v":2,"eventName":"Add","payload":[2,3],"cid":"3f9a...","type":"request","caps":["cancel"]}
+   ```
+2. A 1.4 server that sees `caps` on a request writes one `hello` envelope back before it
+   handles that request:
+
+   ```json
+   {"v":2,"eventName":"","payload":null,"type":"hello","caps":["cancel"]}
+   ```
+
+   A server never sends `hello` to a client that did not advertise `caps`, so a 1.3 client
+   never receives one.
+3. A 1.4 client that receives `hello` records the server's capabilities. `hello` is never
+   raised as `MessageReceived`.
+
+**Cancel.** When a `SendAndWaitAsync` call times out or its `CancellationToken` fires, and
+only if the server has said `hello` with `cancel`, the client sends:
+
+```json
+{"v":2,"eventName":"Add","payload":null,"cid":"3f9a...","type":"cancel"}
+```
+
+This is best-effort and fire-and-forget: a write failure is ignored, and the caller has
+already received its `TimeoutException` or `TaskCanceledException`. A client never sends
+`cancel` to a server that did not say `hello`, because a 1.3 server would raise it as an
+ordinary `MessageReceived` event.
+
+On the server, `cancel` is handled as soon as it is read, without waiting behind queued
+messages:
+
+- If the request is still queued, its handler never runs.
+- If the handler is running, the `CancellationToken` on its `RequestContext` is cancelled.
+- A cancelled request gets no `response` or `errorResponse`. If the handler throws
+  `OperationCanceledException` while its token is cancelled, nothing is sent. An
+  `OperationCanceledException` the handler throws for its own reasons, with the token not
+  cancelled, still becomes an `errorResponse` as in 1.3.
+- A `cancel` for an unknown or finished `cid` is ignored. `cancel` is never raised as
+  `MessageReceived`.
+
+The handler token is also cancelled when the client disconnects or the server stops.
+
+### Late responses are dropped
+
+A client remembers the `cid`s of its last 1024 requests that timed out or were cancelled.
+A `response` or `errorResponse` that later arrives for one of them is discarded. Before
+1.4.0, it was raised as `MessageReceived`. A response with a `cid` the client never sent
+still falls through to `MessageReceived`, as in 1.3.
+
+### Ordering and concurrency on the server
+
+By default (`MaxConcurrentRequests = 1`), a server processes each client's messages one at a
+time, in the order they arrived. It awaits each request handler before it looks at the next
+message. This is the 1.3 behavior: an event sent after a request is delivered only after that
+request's handler has finished.
+
+With `MaxConcurrentRequests` set above 1, up to that many request handlers per client run at
+once. Events are still raised in arrival order, but no longer wait for running handlers, and
+responses are written as handlers finish, so they may come back in a different order than the
+requests. Clients match responses by `cid`, so this is invisible to `SendAndWaitAsync`
+callers. The setting is per server and changes nothing on the wire.
+
+Each client's unprocessed messages are buffered in a bounded queue of 64. When it is full,
+the server stops reading from that client until there is room. TCP or pipe backpressure then
+slows the sender instead of the server buffering without limit.
 
 ### Unknown fields are ignored
 

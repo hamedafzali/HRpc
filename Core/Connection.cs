@@ -42,6 +42,29 @@ namespace HRpc.Core
         /// </summary>
         public int MaxMessageSizeBytes { get; set; } = MessageSizeLimits.DefaultMaxMessageSizeBytes;
 
+        private TimeSpan? _keepAlive;
+
+        /// <summary>
+        /// TCP only: keepalive idle time. See <see cref="TcpConnection.KeepAlive"/>. Propagated
+        /// when <see cref="ConnectAsync"/> is called.
+        /// </summary>
+        public TimeSpan? KeepAlive
+        {
+            get => _keepAlive;
+            set
+            {
+                SocketKeepAlive.Validate(value);
+                _keepAlive = value;
+            }
+        }
+
+        /// <summary>
+        /// Pipes only: connect only to a server running as the current user. See
+        /// <see cref="PipeConnection.CurrentUserOnly"/>. Propagated when <see cref="ConnectAsync"/>
+        /// is called.
+        /// </summary>
+        public bool CurrentUserOnly { get; set; }
+
         public async Task ConnectAsync(string target, CancellationToken cancellationToken = default)
         {
             DisposeCurrentConnection();
@@ -55,7 +78,7 @@ namespace HRpc.Core
                 }
                 var host = parts[0];
 
-                _tcpConnection = new TcpConnection { MaxMessageSizeBytes = MaxMessageSizeBytes };
+                _tcpConnection = new TcpConnection { MaxMessageSizeBytes = MaxMessageSizeBytes, KeepAlive = KeepAlive };
                 _tcpConnection.MessageReceived += OnMessageReceived;
                 _tcpConnection.Connected += OnConnected;
                 _tcpConnection.Disconnected += OnDisconnected;
@@ -65,7 +88,7 @@ namespace HRpc.Core
             }
             else if (TransportType == TransportType.Pipe)
             {
-                _pipeConnection = new PipeConnection { MaxMessageSizeBytes = MaxMessageSizeBytes };
+                _pipeConnection = new PipeConnection { MaxMessageSizeBytes = MaxMessageSizeBytes, CurrentUserOnly = CurrentUserOnly };
                 _pipeConnection.MessageReceived += OnMessageReceived;
                 _pipeConnection.Connected += OnConnected;
                 _pipeConnection.Disconnected += OnDisconnected;

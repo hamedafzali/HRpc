@@ -19,8 +19,11 @@ namespace HRpc.Core
         // Registered via OnRequest before a transport exists yet (the common case: subscribe,
         // then StartAsync). Replayed onto the concrete transport once it's constructed, and also
         // applied immediately below when a transport is already running.
-        private readonly Dictionary<string, Func<IEventMessage, Task<object?>>> _pendingRequestHandlers =
-            new Dictionary<string, Func<IEventMessage, Task<object?>>>();
+        private readonly Dictionary<string, Func<IEventMessage, RequestContext, Task<object?>>> _pendingRequestHandlers =
+            new Dictionary<string, Func<IEventMessage, RequestContext, Task<object?>>>();
+
+        private int _maxConcurrentRequests = 1;
+        private TimeSpan? _keepAlive;
 
         public TransportType TransportType
         {
@@ -47,6 +50,77 @@ namespace HRpc.Core
         public int MaxMessageSizeBytes { get; set; } = MessageSizeLimits.DefaultMaxMessageSizeBytes;
 
         /// <summary>
+        /// How many request handlers may run at once for a single client; the default, 1, is the
+        /// 1.3 behavior. See <see cref="TcpServer.MaxConcurrentRequests"/>. Propagated to the
+        /// underlying transport server when <see cref="StartAsync"/> is called.
+        /// </summary>
+        public int MaxConcurrentRequests
+        {
+            get => _maxConcurrentRequests;
+            set
+            {
+                ServerCore.ValidateMaxConcurrentRequests(value);
+                _maxConcurrentRequests = value;
+            }
+        }
+
+        /// <summary>
+        /// TCP only: keepalive idle time for accepted connections. See
+        /// <see cref="TcpServer.KeepAlive"/>. Propagated when <see cref="StartAsync"/> is called.
+        /// </summary>
+        public TimeSpan? KeepAlive
+        {
+            get => _keepAlive;
+            set
+            {
+                SocketKeepAlive.Validate(value);
+                _keepAlive = value;
+            }
+        }
+
+        /// <summary>
+        /// Pipes only: accept clients running as the current user only. See
+        /// <see cref="PipeServer.CurrentUserOnly"/>. Propagated when <see cref="StartAsync"/> is called.
+        /// </summary>
+        public bool CurrentUserOnly { get; set; }
+
+        /// <summary>Ids of the clients connected right now; empty before <see cref="StartAsync"/>.</summary>
+        public IReadOnlyCollection<string> ConnectedClients =>
+            _tcpServer?.ConnectedClients ?? _pipeServer?.ConnectedClients ?? (IReadOnlyCollection<string>)Array.Empty<string>();
+
+        /// <summary>Pushes an event to one client. See <see cref="TcpServer.SendAsync"/>.</summary>
+        public Task SendAsync(string clientId, IEventMessage message)
+        {
+            if (_tcpServer != null)
+            {
+                return _tcpServer.SendAsync(clientId, message);
+            }
+
+            if (_pipeServer != null)
+            {
+                return _pipeServer.SendAsync(clientId, message);
+            }
+
+            return Task.FromException(new InvalidOperationException("Server is not started."));
+        }
+
+        /// <summary>Pushes an event to every connected client. See <see cref="TcpServer.BroadcastAsync"/>.</summary>
+        public Task<int> BroadcastAsync(IEventMessage message)
+        {
+            if (_tcpServer != null)
+            {
+                return _tcpServer.BroadcastAsync(message);
+            }
+
+            if (_pipeServer != null)
+            {
+                return _pipeServer.BroadcastAsync(message);
+            }
+
+            return Task.FromException<int>(new InvalidOperationException("Server is not started."));
+        }
+
+        /// <summary>
         /// Registers <paramref name="handler"/> to answer incoming requests (see
         /// <see cref="TcpServer.OnRequest"/> for the full contract) named
         /// <paramref name="eventName"/>. May be called before or after <see cref="StartAsync"/> —
@@ -54,6 +128,21 @@ namespace HRpc.Core
         /// created.
         /// </summary>
         public void OnRequest(string eventName, Func<IEventMessage, Task<object?>> handler)
+        {
+            if (handler == null)
+            {
+                throw new ArgumentNullException(nameof(handler));
+            }
+
+            OnRequest(eventName, (message, _) => handler(message));
+        }
+
+        /// <summary>
+        /// Like <see cref="OnRequest(string, Func{IEventMessage, Task{object}})"/>, but the handler
+        /// also gets a <see cref="RequestContext"/> (client id, cancellation token). See
+        /// <see cref="TcpServer.OnRequest(string, Func{IEventMessage, RequestContext, Task{object}})"/>.
+        /// </summary>
+        public void OnRequest(string eventName, Func<IEventMessage, RequestContext, Task<object?>> handler)
         {
             if (string.IsNullOrEmpty(eventName))
             {
@@ -76,7 +165,12 @@ namespace HRpc.Core
                     throw new ArgumentException("For TCP, target must be a valid port number", nameof(target));
                 }
 
-                _tcpServer = new TcpServer { MaxMessageSizeBytes = MaxMessageSizeBytes };
+                _tcpServer = new TcpServer
+                {
+                    MaxMessageSizeBytes = MaxMessageSizeBytes,
+                    MaxConcurrentRequests = MaxConcurrentRequests,
+                    KeepAlive = KeepAlive,
+                };
                 _tcpServer.ClientConnected += OnClientConnected;
                 _tcpServer.ClientDisconnected += OnClientDisconnected;
                 _tcpServer.MessageReceived += OnMessageReceived;
@@ -90,7 +184,12 @@ namespace HRpc.Core
             }
             else if (TransportType == TransportType.Pipe)
             {
-                _pipeServer = new PipeServer { MaxMessageSizeBytes = MaxMessageSizeBytes };
+                _pipeServer = new PipeServer
+                {
+                    MaxMessageSizeBytes = MaxMessageSizeBytes,
+                    MaxConcurrentRequests = MaxConcurrentRequests,
+                    CurrentUserOnly = CurrentUserOnly,
+                };
                 _pipeServer.ClientConnected += OnClientConnected;
                 _pipeServer.ClientDisconnected += OnClientDisconnected;
                 _pipeServer.MessageReceived += OnMessageReceived;

@@ -3,7 +3,7 @@
 Where HRpc is heading, and why. This is a plan, not a promise: priorities can change, and
 nothing here ships until it appears in [`CHANGELOG.md`](../CHANGELOG.md).
 
-_Last reviewed: 2026-10-14._
+_Last reviewed: 2026-10-17._
 
 ## Where HRpc fits
 
@@ -34,30 +34,18 @@ over TCP, pipes, stdio or WebSockets. The plan below reinforces that niche:
 | 1.3.0 | Correlated request/response: `OnRequest` on servers, `SendAndWaitAsync` on connections. |
 | 1.3.1 | Writes serialized per connection (fixes frame corruption under concurrent sends). `Logger` marked `[Obsolete]`. CI on Node 24 actions. |
 | 1.3.2 | `net10.0` target, ahead of .NET 8/9 end of support on 2026-11-10. CI on Linux **and macOS** for every modern target. |
+| 1.4.0 | Server push (`SendAsync`/`BroadcastAsync`, client ids), request cancellation with a `RequestContext` token, `MaxConcurrentRequests`, late replies dropped, TCP `KeepAlive`, `CurrentUserOnly` pipes, a shared internal transport core, and a fix for the `PipeServer` idle CPU/memory leak. Wire-compatible with 1.3 in both directions, tested against the released 1.3.2 binary. |
 
-## 1.4.0: core cleanup, server push, cancellation
+## Left over from 1.4.0
 
-1. **Shared stream-transport base class.** `TcpConnection`/`PipeConnection` and
-   `TcpServer`/`PipeServer` are about 85% identical. Move the receive loop, framing, write
-   lock, request/response correlation and error handling into one internal base, so every
-   later transport only supplies "open a stream".
-2. **Server push**, the most common gap in event-style IPC.
-   - Client IDs on `ClientConnected` and `MessageReceived`.
-   - `SendAsync(clientId, message)` and `BroadcastAsync(message)` on servers.
-   - A per-client write lock.
-3. **Request cancellation.** When the `CancellationToken` passed to `SendAndWaitAsync` fires,
-   send a `cancel` envelope with the request's `cid`. `OnRequest` handlers then receive a
-   token that trips. StreamJsonRpc has this, and long-running requests (AI calls especially)
-   need it. Purely additive on the wire: a new `type` value.
-4. **Run `OnRequest` handlers off the receive loop.** Today one slow handler blocks every
-   other message on that connection. Add a concurrency limit option.
-5. **Optional heartbeat / dead-peer detection.** A configurable ping interval and timeout, so
-   a silently dropped peer is noticed without waiting for a write to fail.
-6. **Opt-in `CurrentUserOnly` for pipes.** HRpc pipes currently accept any local user. Add a
-   server/client option that passes `PipeOptions.CurrentUserOnly`. The default stays
-   unchanged until 2.0.
-7. **Drop `net9.0` from the package** (optional). .NET 9 apps fall back to the `net8.0`
-   build, so this only trims the package.
+- **Application-level heartbeat.** 1.4.0 shipped TCP keepalive (`KeepAlive`) instead: it
+  needs no protocol change and works against any peer. A ping/pong envelope would also cover
+  named pipes and half-open proxies. Reconsider it together with auto-reconnect.
+- **Drop `net9.0` from the package** (optional). .NET 9 apps fall back to the `net8.0`
+  build, so this only trims the package. Deferred so 1.4.0 changes no install surface.
+- **Assembly version.** The package sets `GenerateAssemblyInfo=false`, so `HRpc.dll` reports
+  version 0.0.0.0 in every release so far. Stamp the real version once it is clear no
+  consumer depends on 0.0.0.0 (for example in a binding redirect).
 
 ## 1.5.0: transports and AOT
 
@@ -152,5 +140,6 @@ is created at `/tmp/<pipeName>`
   `CurrentUserOnly` (pipes) and TLS (TCP) cover the local and transport parts. A token
   handshake is a candidate for after 1.5.
 - **Auto-reconnect.** A dropped client stays dropped. The application must reconnect.
-  A candidate for after 1.4, once heartbeats exist to detect drops.
+  Since 1.4.0, `KeepAlive` makes a silent TCP drop raise `Disconnected`, which is the
+  signal a reconnect loop needs. Built-in reconnect is a candidate for 1.5.
 - **Replay protection.** None, and none planned at the library level.

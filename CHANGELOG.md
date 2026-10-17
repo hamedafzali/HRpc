@@ -4,6 +4,75 @@ All notable changes to HRpc are documented in this file.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-17
+
+Every change is opt-in or invisible on the wire. A 1.4 client works with a 1.3 server and a
+1.3 client works with a 1.4 server, over TCP and named pipes. The test suite checks this
+against the released 1.3.2 package, loaded side by side (`Tests/CompatibilityTests.cs`).
+
+### Added
+
+- **Server push.** `SendAsync(clientId, message)` sends to one client,
+  `BroadcastAsync(message)` sends to all and returns how many it reached, and
+  `ConnectedClients` lists the ids. Available on `Server`, `TcpServer` and `PipeServer`.
+  Clients receive pushes as ordinary `MessageReceived` events, so 1.3 clients get them too.
+- **Client ids.** `ConnectionEventArgs.ClientId` and `MessageReceivedEventArgs.ClientId` are
+  set on server-side events (null on client-side events). A client is registered before
+  `ClientConnected` fires, so a subscriber can push a welcome message straight away.
+- **Request cancellation.** When a `SendAndWaitAsync` call times out or its token fires, the
+  client sends a `cancel` envelope, but only to a server that announced support with a
+  `hello` (1.4+). A new `OnRequest(eventName, (message, context) => ...)` overload passes a
+  `RequestContext` with the caller's `ClientId` and a `CancellationToken`. The token trips on
+  cancel, client disconnect or server stop. A cancelled request gets no reply, and a request
+  cancelled while still queued never runs. See docs/PROTOCOL.md, "Capabilities and
+  cancellation".
+- **`MaxConcurrentRequests`** on servers (default 1, the 1.3 behavior). Above 1, up to that
+  many request handlers per client run at once, and events no longer wait behind them.
+- **`KeepAlive`** (`TimeSpan?`) on `TcpConnection`, `TcpServer`, `Connection` and `Server`
+  turns on TCP keepalive, so a peer that vanishes without closing is detected. Off by default.
+- **`CurrentUserOnly`** on `PipeConnection`, `PipeServer`, `Connection` and `Server`
+  restricts a pipe to the current user. The server only accepts clients running as the
+  current user; the client only connects to a server owned by the current user and throws
+  `UnauthorizedAccessException` otherwise. Off by default.
+- `MessageEnvelope.Caps` and the `MessageTypeHello`, `MessageTypeCancel` and
+  `CapabilityCancel` constants.
+
+### Fixed
+
+- **`PipeServer` spun and leaked while idle.** Its accept loop created a new waiting pipe
+  instance on every pass, without waiting for the previous one to receive a client, so an
+  idle server kept a CPU core busy and its memory kept growing. It now keeps exactly one
+  instance waiting.
+- **A reply that arrives after its request timed out or was cancelled is dropped.** It used
+  to surface as a stray `MessageReceived` event. A reply with a `cid` the client never sent
+  still surfaces, as before.
+- **A throwing `ClientConnected` subscriber no longer stops a `TcpServer` accepting
+  clients.** It is reported through `ErrorOccurred` as "Unhandled exception in
+  ClientConnected subscriber", like other subscriber exceptions.
+- **A failed response write no longer ends the client's message loop on the server.** It is
+  reported through `ErrorOccurred` as "Error in HandleClientAsync".
+
+### Changed
+
+- Server-side `MessageReceived` is raised from a per-client processing task instead of the
+  socket read loop. Order is unchanged: a client's messages are still raised one at a time,
+  in arrival order, and with the default `MaxConcurrentRequests` a request handler still
+  finishes before the next message is raised. The difference is that the server keeps
+  reading (up to 64 queued messages per client) while a handler runs, so it can act on a
+  `cancel` immediately.
+- Internally, `TcpConnection`/`PipeConnection` and `TcpServer`/`PipeServer` now share one
+  transport-independent core. No public type, member or protected field was removed.
+
+### Tests
+
+- `Tests/CompatibilityTests.cs` runs 1.3.2 clients against 1.4 servers and 1.4 clients
+  against 1.3.2 servers, over TCP and pipes. It covers requests, errors, events, push,
+  timeouts and cancellation, and checks that neither side sees an unexpected message. The
+  1.3.2 package is downloaded at build time.
+- `Tests/V14FeatureTests.cs` covers every feature above, plus raw-wire checks that event
+  traffic carries no `caps`, that `hello` is sent only in reply to `caps`, and that `cancel`
+  is sent only after `hello`.
+
 ## [1.3.2] - 2026-10-14
 
 ### Added

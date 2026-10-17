@@ -19,4 +19,18 @@
     <ProjectReference Include="..\HRpc.csproj" />
   </ItemGroup>
 
+  <!-- The released 1.3.2 package, downloaded (not referenced) so CompatibilityTests can load it
+       into its own AssemblyLoadContext and run old and new peers against each other. -->
+  <PropertyGroup>
+    <HRpcCompatVersion>1.3.2</HRpcCompatVersion>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(TargetFramework)' != 'net48'">
+    <PackageDownload Include="HRpc" Version="[$(HRpcCompatVersion)]" />
+  </ItemGroup>
+  <Target Name="CopyHRpcCompatAssembly" AfterTargets="Build" Condition="'$(TargetFramework)' != '' and '$(TargetFramework)' != 'net48'">
+    <Copy SourceFiles="$(NuGetPackageRoot)hrpc/$(HRpcCompatVersion)/lib/net8.0/HRpc.dll"
+          DestinationFolder="$(OutDir)compat/v$(HRpcCompatVersion)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

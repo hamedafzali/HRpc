@@ -1,9 +1,8 @@
 using System;
 using System.Collections.Concurrent;
-using System.IO;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using HRpc.Events;
@@ -22,15 +21,21 @@ namespace HRpc.Core
         private volatile bool _running;
         private Task? _acceptLoopTask;
 
-        // Registered by OnRequest, consulted by HandleClientAsync when an incoming envelope is
-        // "type":"request". See OnRequest's doc comment.
-        private readonly ConcurrentDictionary<string, Func<IEventMessage, Task<object?>>> _requestHandlers =
-            new ConcurrentDictionary<string, Func<IEventMessage, Task<object?>>>();
+        // Request handlers, connected clients and push. See ServerCore.
+        private readonly ServerCore _core;
+        private int _maxConcurrentRequests = 1;
+        private TimeSpan? _keepAlive;
 
         public event EventHandler<ConnectionEventArgs>? ClientConnected;
         public event EventHandler<ConnectionEventArgs>? ClientDisconnected;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<ErrorEventArgs>? ErrorOccurred;
+
+        public TcpServer()
+        {
+            _core = new ServerCore(this, () => ClientConnected, () => ClientDisconnected, () => MessageReceived,
+                (message, ex) => OnErrorOccurred(message, ex));
+        }
 
         /// <summary>
         /// Maximum size, in UTF-8 encoded bytes, of a single incoming message. A client that
@@ -39,6 +44,65 @@ namespace HRpc.Core
         /// closed. Applies to connections accepted after this is set.
         /// </summary>
         public int MaxMessageSizeBytes { get; set; } = MessageSizeLimits.DefaultMaxMessageSizeBytes;
+
+        /// <summary>
+        /// How many <see cref="OnRequest(string, Func{IEventMessage, Task{object}})"/> handlers may
+        /// run at once for a single client. The default, 1, runs them one at a time in arrival
+        /// order, and a message received after a request is delivered only once that request's
+        /// handler has finished: exactly the 1.3 behavior. Higher values let a slow handler run
+        /// alongside later requests and events from the same client. Applies to connections
+        /// accepted after this is set.
+        /// </summary>
+        public int MaxConcurrentRequests
+        {
+            get => _maxConcurrentRequests;
+            set
+            {
+                ServerCore.ValidateMaxConcurrentRequests(value);
+                _maxConcurrentRequests = value;
+            }
+        }
+
+        /// <summary>
+        /// Turns on TCP keepalive with this idle time on accepted connections, so a silently
+        /// dropped client is detected and <see cref="ClientDisconnected"/> fires. Null (the
+        /// default) leaves the OS default, usually off. Nothing changes on the wire. Applies to
+        /// connections accepted after this is set.
+        /// </summary>
+        public TimeSpan? KeepAlive
+        {
+            get => _keepAlive;
+            set
+            {
+                SocketKeepAlive.Validate(value);
+                _keepAlive = value;
+            }
+        }
+
+        /// <summary>
+        /// Ids of the clients connected right now, as passed in
+        /// <see cref="ConnectionEventArgs.ClientId"/> and <see cref="MessageReceivedEventArgs.ClientId"/>.
+        /// </summary>
+        public IReadOnlyCollection<string> ConnectedClients => _core.ConnectedClients;
+
+        /// <summary>
+        /// Pushes <paramref name="message"/> to one client as an ordinary event, which any client
+        /// version receives through MessageReceived. Throws <see cref="InvalidOperationException"/>
+        /// if no client with that id is connected.
+        /// </summary>
+        public Task SendAsync(string clientId, IEventMessage message)
+        {
+            return _core.SendAsync(clientId, message);
+        }
+
+        /// <summary>
+        /// Pushes <paramref name="message"/> to every connected client and returns how many it
+        /// reached. A client that disconnects during the broadcast is skipped, not reported.
+        /// </summary>
+        public Task<int> BroadcastAsync(IEventMessage message)
+        {
+            return _core.BroadcastAsync(message);
+        }
 
         /// <summary>
         /// Registers <paramref name="handler"/> to answer incoming "type":"request" envelopes
@@ -54,12 +118,18 @@ namespace HRpc.Core
         /// </summary>
         public void OnRequest(string eventName, Func<IEventMessage, Task<object?>> handler)
         {
-            if (string.IsNullOrEmpty(eventName))
-            {
-                throw new ArgumentException("Event name cannot be null/empty.", nameof(eventName));
-            }
+            _core.OnRequest(eventName, handler);
+        }
 
-            _requestHandlers[eventName] = handler ?? throw new ArgumentNullException(nameof(handler));
+        /// <summary>
+        /// Like <see cref="OnRequest(string, Func{IEventMessage, Task{object}})"/>, but the handler
+        /// also gets a <see cref="RequestContext"/> with the calling client's id and a
+        /// cancellation token that trips when the client cancels or disconnects, or the server
+        /// stops.
+        /// </summary>
+        public void OnRequest(string eventName, Func<IEventMessage, RequestContext, Task<object?>> handler)
+        {
+            _core.OnRequest(eventName, handler);
         }
 
         /// <summary>
@@ -139,11 +209,20 @@ namespace HRpc.Core
                     // RaiseDisconnected — see CHANGELOG).
                     var endPoint = client.Client.RemoteEndPoint as IPEndPoint;
 
-                    ClientConnected?.Invoke(this, new ConnectionEventArgs(
-                        endPoint?.Address.ToString() ?? string.Empty,
-                        endPoint?.Port ?? 0
-                    ));
+                    var keepAlive = _keepAlive;
+                    if (keepAlive.HasValue)
+                    {
+                        try
+                        {
+                            SocketKeepAlive.Apply(client.Client, keepAlive.Value);
+                        }
+                        catch (Exception ex) when (ex is SocketException || ex is ObjectDisposedException)
+                        {
+                            OnErrorOccurred("Failed to enable TCP keepalive", ex);
+                        }
+                    }
 
+                    // HandleClientAsync raises ClientConnected synchronously, before the next accept.
                     var task = HandleClientAsync(client, endPoint, serverToken);
                     _clientTasks[client] = task;
                     _ = task.ContinueWith(_ =>
@@ -180,54 +259,15 @@ namespace HRpc.Core
 
         private async Task HandleClientAsync(TcpClient client, IPEndPoint? endPoint, CancellationToken cancellationToken)
         {
-#if NETFRAMEWORK
-            using var stream = client.GetStream();
-#else
-            await using var stream = client.GetStream();
-#endif
-            var reader = new BoundedLineReader(stream, MaxMessageSizeBytes);
-
             try
             {
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    var line = await reader.ReadLineAsync(cancellationToken);
-                    if (line == null)
-                    {
-                        break;
-                    }
-
-                    MessageEnvelope message;
-                    try
-                    {
-                        message = MessageEnvelope.Deserialize(line);
-                    }
-                    catch (Exception ex) when (ReceiveLoopErrors.IsRecoverableParseFailure(ex))
-                    {
-                        // Recoverable: the line boundary is intact, so resynchronization is free.
-                        // Skip this message and keep reading rather than killing the connection.
-                        // Anything not a genuine parse failure (UnsupportedProtocolVersionException,
-                        // OperationCanceledException, or a non-parse bug) falls through this filter
-                        // and is handled by the outer catch below instead.
-                        OnErrorOccurred(ex.Message, ex);
-                        continue;
-                    }
-
-                    if (message.Type == MessageEnvelope.MessageTypeRequest && message.Cid != null
-                        && _requestHandlers.TryGetValue(message.EventName, out var handler))
-                    {
-                        await HandleRequestAsync(stream, message, handler, cancellationToken).ConfigureAwait(false);
-                        continue;
-                    }
-
-                    SafeInvoke.EachHandler(MessageReceived, this,
-                        new MessageReceivedEventArgs(new EventMessage(message.EventName, message.PayloadValue)),
-                        ex => OnErrorOccurred("Unhandled exception in MessageReceived subscriber", ex));
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected during shutdown.
+#if NETFRAMEWORK
+                using var stream = client.GetStream();
+#else
+                await using var stream = client.GetStream();
+#endif
+                await _core.RunClientAsync(stream, endPoint?.Address.ToString() ?? string.Empty, endPoint?.Port ?? 0,
+                    MaxMessageSizeBytes, _maxConcurrentRequests, null, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -235,51 +275,8 @@ namespace HRpc.Core
             }
             finally
             {
-                // Guarded so a throwing ClientDisconnected subscriber can't prevent client.Close()
-                // from running below.
-                SafeInvoke.EachHandler(ClientDisconnected, this, new ConnectionEventArgs(
-                    endPoint?.Address.ToString() ?? string.Empty,
-                    endPoint?.Port ?? 0
-                ), ex =>
-                {
-                    System.Diagnostics.Trace.WriteLine(
-                        $"[HRpc] ClientDisconnected subscriber threw and was swallowed: {ex}");
-                });
-
                 client.Close();
             }
-        }
-
-        /// <summary>
-        /// Invokes a registered request handler and writes back a "response" (or, on a thrown
-        /// exception, "errorResponse") envelope carrying the same "cid" -- directly on this
-        /// client's own stream, since a reply only ever needs to reach the client that sent the
-        /// request it answers, not any other connected client.
-        /// </summary>
-        private async Task HandleRequestAsync(Stream stream, MessageEnvelope request, Func<IEventMessage, Task<object?>> handler, CancellationToken cancellationToken)
-        {
-            MessageEnvelope response;
-            try
-            {
-                var result = await handler(new EventMessage(request.EventName, request.PayloadValue)).ConfigureAwait(false);
-                response = new MessageEnvelope(request.EventName, result)
-                {
-                    Cid = request.Cid,
-                    Type = MessageEnvelope.MessageTypeResponse,
-                };
-            }
-            catch (Exception ex)
-            {
-                response = new MessageEnvelope(request.EventName, (object?)null)
-                {
-                    Cid = request.Cid,
-                    Type = MessageEnvelope.MessageTypeErrorResponse,
-                    Error = new MessageError { Code = ex.GetType().Name, Message = ex.Message },
-                };
-            }
-
-            var bytes = Encoding.UTF8.GetBytes(response.Serialize() + "\n");
-            await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task StopAsync()
